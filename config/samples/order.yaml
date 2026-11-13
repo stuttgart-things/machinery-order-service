@@ -1,0 +1,19 @@
+# An order created with kubectl: the controller renders it with the
+# service's own claim-machinery-api identity. Orders through the API are
+# rendered with the orderer's token instead (spec.rendered).
+apiVersion: order.machinery.stuttgart-things.com/v1alpha1
+kind: Order
+metadata:
+  name: ord-000000000001
+  labels:
+    stuttgart-things.com/order-id: ord-000000000001
+spec:
+  template: native-vm-labda-vsphere
+  requestedBy: user:default/sthings
+  placement:
+    managementCluster: machinery
+  parameters:
+    name: demo
+    use_case: baseos
+    size: small
+    owner: group:default/platform-team

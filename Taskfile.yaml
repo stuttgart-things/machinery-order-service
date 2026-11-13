@@ -1,0 +1,38 @@
+# https://taskfile.dev
+version: "3"
+
+vars:
+  CONTROLLER_TOOLS_VERSION: v0.23.0
+  ENVTEST_K8S_VERSION: "1.37.0"
+
+env:
+  GOTOOLCHAIN: go1.27.4
+
+tasks:
+  generate:
+    desc: Deepcopy, CRDs and RBAC from the API types and kubebuilder markers
+    cmds:
+      - go run sigs.k8s.io/controller-tools/cmd/controller-gen@{{.CONTROLLER_TOOLS_VERSION}} object paths=./api/...
+      - go run sigs.k8s.io/controller-tools/cmd/controller-gen@{{.CONTROLLER_TOOLS_VERSION}} crd paths=./api/... output:crd:artifacts:config=config/crd
+      - go run sigs.k8s.io/controller-tools/cmd/controller-gen@{{.CONTROLLER_TOOLS_VERSION}} rbac:roleName=machinery-order-service paths=./internal/controller/... output:rbac:artifacts:config=config/rbac
+
+  envtest:
+    desc: Download the envtest binaries and print KUBEBUILDER_ASSETS
+    cmds:
+      - go run sigs.k8s.io/controller-runtime/tools/setup-envtest@latest use {{.ENVTEST_K8S_VERSION}} -p path
+
+  test:
+    desc: Unit tests plus envtest (controller, serve end to end)
+    cmds:
+      - KUBEBUILDER_ASSETS="$(go run sigs.k8s.io/controller-runtime/tools/setup-envtest@latest use {{.ENVTEST_K8S_VERSION}} -p path)" go test ./...
+
+  build:
+    desc: Build ./bin/machinery-order-service
+    cmds:
+      - go build -o ./bin/machinery-order-service .
+
+  run:
+    desc: Run against the current kubeconfig (needs CLAIM_API_URL and GITHUB_TOKEN or the GITHUB_APP_* variables)
+    cmds:
+      - kubectl apply -f config/crd
+      - go run . serve

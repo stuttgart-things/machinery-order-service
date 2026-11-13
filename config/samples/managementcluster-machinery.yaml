@@ -1,0 +1,40 @@
+# LabDA: machinery applies clusters/labda/vsphere/machinery-orders-xrs.
+apiVersion: order.machinery.stuttgart-things.com/v1alpha1
+kind: ManagementCluster
+metadata:
+  name: machinery
+spec:
+  lab: labda
+  gitops:
+    repository: stuttgart-things/stuttgart-things
+    baseBranch: main
+    ordersPath: clusters/labda/vsphere/machinery-orders-xrs
+  render:
+    environmentConfig: labda
+  machinery:
+    # gRPC through the Gateway, bearer token from Vault entry machinery-grpc.
+    endpoint: machinery-grpc.example.sthings:443
+    tokenSecretRef:
+      name: machinery-grpc
+      key: token
+  # Needs machinery to watch Flux Kustomizations with
+  # infoFields [{label: lastAppliedRevision, path: status.lastAppliedRevision}].
+  flux:
+    name: machinery-orders-xrs
+    namespace: flux-system
+---
+# LabUL: machinery-labul applies clusters/labul/proxmox/machinery-labul-orders-xrs.
+apiVersion: order.machinery.stuttgart-things.com/v1alpha1
+kind: ManagementCluster
+metadata:
+  name: machinery-labul
+spec:
+  lab: labul
+  gitops:
+    ordersPath: clusters/labul/proxmox/machinery-labul-orders-xrs
+  render:
+    environmentConfig: labul
+  machinery:
+    endpoint: machinery-grpc.labul.example.sthings:443
+    tokenSecretRef:
+      name: machinery-labul-grpc
