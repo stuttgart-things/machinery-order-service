@@ -17,7 +17,7 @@ func (m *Dagger) BuildAndTest(
 	goVersion string,
 	// +optional
 	// +default="1.37.0"
-	envtestK8sVersion string,
+	kubeVersion string,
 	// +optional
 	// +default="./..."
 	testArg string,
@@ -32,7 +32,7 @@ func (m *Dagger) BuildAndTest(
 		From("golang:"+goVersion+"-bookworm").
 		WithMountedCache("/go/pkg/mod", dag.CacheVolume("go-mod-"+goVersion)).
 		WithMountedCache("/root/.cache/go-build", dag.CacheVolume("go-build-"+goVersion)).
-		WithMountedCache("/envtest", dag.CacheVolume("envtest-"+envtestK8sVersion)).
+		WithMountedCache("/envtest", dag.CacheVolume("envtest-"+kubeVersion)).
 		WithEnvVariable("GOTOOLCHAIN", "local").
 		WithDirectory("/src", src).
 		WithWorkdir("/src").
@@ -40,7 +40,7 @@ func (m *Dagger) BuildAndTest(
 		WithExec([]string{"sh", "-c", fmt.Sprintf(
 			`set -e
 assets="$(setup-envtest use %s --bin-dir /envtest -p path)"
-KUBEBUILDER_ASSETS="$assets" go test -count=1 -cover %s`, envtestK8sVersion, testArg)})
+KUBEBUILDER_ASSETS="$assets" go test -count=1 -cover %s`, kubeVersion, testArg)})
 
 	out, err := ctr.Stdout(ctx)
 	if err != nil {
