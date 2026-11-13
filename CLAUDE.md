@@ -6,7 +6,7 @@ Guidance for Claude Code in this repository.
 
 ```bash
 export GOTOOLCHAIN=go1.27.4
-task generate                       # after changing api/v1alpha1 or kubebuilder markers
+task generate                       # after changing api/v1alpha1 or kubebuilder markers (also refreshes deployment/generated)
 task test                           # needs envtest binaries (task envtest)
 KUBEBUILDER_ASSETS=$(setup-envtest use 1.37.0 -p path) go test ./...
 go test ./internal/controller -run TestOrderLifecycle -v
@@ -44,6 +44,23 @@ API (`apiRunnable`, every replica).
 - `internal/web` - UI stage 1, clusterbook style (`pageHead`, `--hr-*`,
   relative URLs against `<base href>`), htmx vendored in `static/`.
 - `internal/ghauth` - GitHub App installation token or static token.
+
+## Deployment and CI
+
+- `deployment/` is a KCL module (`main.k` emits a YAML stream via
+  `manifests.yaml_stream`, which the Dagger KCL module passes through). It
+  reads CRDs and the ClusterRole from `deployment/generated` with
+  `file.modpath()`; `task generate` refreshes them and
+  `.github/workflows/check-generated.yaml` fails on drift.
+- Options are `config.<field>` of `schema.k`; the example profile is
+  `tests/kcl-deploy-profile.yaml` (flat keys, as the Dagger KCL module and the
+  release workflow read it). Locally: `kcl run deployment -D config.claimApiUrl=...`.
+- `.dagger/`: lint, build, build-and-test (setup-envtest in the container),
+  build-image (ko, `.ko.yaml`), scan-image (Trivy). Image base: distroless
+  static; version via `internal/version` ldflags.
+- Workflows: `build-test` (Dagger), `build-scan-image` and `release` (shared
+  templates in stuttgart-things/github-workflow-templates; release pushes the
+  kustomize base pinned with `config.image`).
 
 ## Rules
 

@@ -105,13 +105,39 @@ order goes from Merged to Building once machinery sees its XR.
 The GitHub App needs `contents: write` and `pull_requests: write` on the
 GitOps repository.
 
+## Deployment
+
+KCL module in [`deployment`](deployment): namespace, the two CRDs, service
+account, ClusterRole/-Binding, ConfigMap, Deployment, Service, optional
+Ingress or HTTPRoute, and ManagementCluster objects. CRDs and RBAC come from
+`deployment/generated` (copied from `config/` by `task generate`; CI fails
+when they drift).
+
+```bash
+task render     # Dagger KCL module with tests/kcl-deploy-profile.yaml
+```
+
+Secrets stay outside the module: `githubAppSecretName` (key
+`private-key.pem`, mounted as a file) and `existingSecretName` (environment,
+e.g. `CLAIM_API_OIDC_CLIENT_SECRET`), each made by External Secrets or by
+hand. The machinery tokens are the Secrets the ManagementClusters name.
+
+A release (semantic-release on `main`) publishes the binaries
+(GoReleaser), `ghcr.io/stuttgart-things/machinery-order-service:<version>`
+(ko, distroless static) and the kustomize base
+`ghcr.io/stuttgart-things/machinery-order-service-kustomize:<version>` pinned
+to that image.
+
 ## Development
 
 ```bash
-task generate   # deepcopy, CRDs, RBAC
-task test       # unit tests + envtest (controller and serve end to end)
-task build
-task run        # against the current kubeconfig
+task generate          # deepcopy, CRDs, RBAC, deployment/generated
+task test              # unit tests + envtest (controller and serve end to end)
+task build-local       # ./bin/machinery-order-service
+task run               # against the current kubeconfig
+task lint              # golangci-lint (Dagger)
+task build-test        # build + all tests incl. envtest (Dagger)
+task build-scan-image  # ko image to ttl.sh + Trivy (Dagger)
 ```
 
 Tests use fakes for everything outside: `internal/delivery/githubfake`
@@ -120,7 +146,6 @@ Tests use fakes for everything outside: `internal/delivery/githubfake`
 
 ## Not here yet
 
-- Deployment (KCL manifests), Dagger build, image and release to GHCR
 - a gRPC API next to REST
 - teardown after the merge, recovering Orders from git + live (`Recovered`),
   `adopt` for hand-written XRs; finding XRs by order-id in machinery needs
