@@ -1,0 +1,97 @@
+# https://taskfile.dev
+version: "3"
+
+vars:
+  PROJECT: machinery-order-service
+  GO_MODULE: github.com/stuttgart-things/machinery-order-service
+  CONTROLLER_TOOLS_VERSION: v0.23.0
+  ENVTEST_K8S_VERSION: "1.37.0"
+  DAGGER_MODULE_DIR: ./.dagger
+  DAGGER_KCL_MODULE: github.com/stuttgart-things/dagger/kcl@v0.139.0
+  DEPLOYMENT_SOURCE_DIR: deployment
+  KCL_PROFILE_FILE: tests/kcl-deploy-profile.yaml
+  RENDERED_OUTPUT_PATH: /tmp/rendered-{{ .PROJECT }}.yaml
+  LINT_REPORT_PATH: /tmp/lint-report-{{ .PROJECT }}.txt
+  TEST_REPORT_PATH: /tmp/test-report-{{ .PROJECT }}.txt
+  BIN_EXPORT_PATH: /tmp/go/build
+
+env:
+  GOTOOLCHAIN: go1.27.4
+
+tasks:
+  generate:
+    desc: Deepcopy, CRDs and RBAC from the API types and markers; copy them into deployment/generated
+    cmds:
+      - go run sigs.k8s.io/controller-tools/cmd/controller-gen@{{.CONTROLLER_TOOLS_VERSION}} object paths=./api/...
+      - go run sigs.k8s.io/controller-tools/cmd/controller-gen@{{.CONTROLLER_TOOLS_VERSION}} crd paths=./api/... output:crd:artifacts:config=config/crd
+      - go run sigs.k8s.io/controller-tools/cmd/controller-gen@{{.CONTROLLER_TOOLS_VERSION}} rbac:roleName=machinery-order-service paths=./internal/controller/... output:rbac:artifacts:config=config/rbac
+      - cp config/crd/*.yaml config/rbac/role.yaml {{ .DEPLOYMENT_SOURCE_DIR }}/generated/
+
+  envtest:
+    desc: Download the envtest binaries and print KUBEBUILDER_ASSETS
+    cmds:
+      - go run sigs.k8s.io/controller-runtime/tools/setup-envtest@latest use {{.ENVTEST_K8S_VERSION}} -p path
+
+  test:
+    desc: Unit tests plus envtest (controller, serve end to end), locally
+    cmds:
+      - KUBEBUILDER_ASSETS="$(go run sigs.k8s.io/controller-runtime/tools/setup-envtest@latest use {{.ENVTEST_K8S_VERSION}} -p path)" go test ./...
+
+  build-local:
+    desc: Build ./bin/machinery-order-service
+    cmds:
+      - go build -ldflags "-X {{ .GO_MODULE }}/internal/version.Version=dev -X {{ .GO_MODULE }}/internal/version.Commit=$(git rev-parse --short HEAD) -X {{ .GO_MODULE }}/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o ./bin/{{ .PROJECT }} .
+
+  run:
+    desc: Run against the current kubeconfig (needs CLAIM_API_URL and GITHUB_TOKEN or the GITHUB_APP_* variables)
+    cmds:
+      - kubectl apply -f config/crd
+      - go run . serve
+
+  lint:
+    desc: golangci-lint via Dagger
+    cmds:
+      - dagger call -m {{ .DAGGER_MODULE_DIR }} lint --src . export --path={{ .LINT_REPORT_PATH }} --progress plain
+      - cat {{ .LINT_REPORT_PATH }}
+
+  build-test:
+    desc: Build and run every test (envtest included) via Dagger
+    cmds:
+      - dagger call -m {{ .DAGGER_MODULE_DIR }} build-and-test --src . --progress plain | tee {{ .TEST_REPORT_PATH }}
+
+  build:
+    desc: Build the binary via Dagger into {{ .BIN_EXPORT_PATH }}
+    cmds:
+      - |
+        dagger call -m {{ .DAGGER_MODULE_DIR }} build --src . --bin-name {{ .PROJECT }} \
+          --ldflags "-X {{ .GO_MODULE }}/internal/version.Version=dev -X {{ .GO_MODULE }}/internal/version.Commit=$(git rev-parse --short HEAD) -X {{ .GO_MODULE }}/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          --progress plain export --path={{ .BIN_EXPORT_PATH }}
+      - "{{ .BIN_EXPORT_PATH }}/{{ .PROJECT }} version"
+
+  build-scan-image:
+    desc: Build the image with ko, push it to ttl.sh and scan it with Trivy
+    cmds:
+      - |
+        REPO="ttl.sh/{{ .PROJECT }}-$(openssl rand -hex 6)"
+        IMAGE_REF=$(dagger call -m {{ .DAGGER_MODULE_DIR }} build-image --src . --repo "$REPO" --push=true --tag 1h --progress plain)
+        echo "Image: $IMAGE_REF"
+        dagger call -m {{ .DAGGER_MODULE_DIR }} scan-image --image-ref "$IMAGE_REF" --severity HIGH,CRITICAL \
+          --progress plain export --path=/tmp/trivy-scan-{{ .PROJECT }}.json
+        echo "Scan report: /tmp/trivy-scan-{{ .PROJECT }}.json"
+
+  render:
+    desc: Render the deployment manifests with the example profile (Dagger KCL module)
+    cmds:
+      - |
+        dagger call -m {{ .DAGGER_KCL_MODULE }} run \
+          --source ./{{ .DEPLOYMENT_SOURCE_DIR }} \
+          --parameters-file ./{{ .KCL_PROFILE_FILE }} \
+          --progress plain export --path={{ .RENDERED_OUTPUT_PATH }}
+      - echo "{{ .RENDERED_OUTPUT_PATH }}"
+
+  pr:
+    desc: Lint, build and test, build and scan the image (before a pull request)
+    cmds:
+      - task: lint
+      - task: build-test
+      - task: build-scan-image

@@ -1,0 +1,31 @@
+name: Generated files
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  generated:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: deepcopy, CRDs, RBAC and deployment/generated are up to date
+        run: |
+          go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.23.0 object paths=./api/...
+          go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.23.0 crd paths=./api/... output:crd:artifacts:config=config/crd
+          go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.23.0 rbac:roleName=machinery-order-service paths=./internal/controller/... output:rbac:artifacts:config=config/rbac
+          cp config/crd/*.yaml config/rbac/role.yaml deployment/generated/
+          git diff --exit-code
+      - name: gofmt
+        run: test -z "$(gofmt -l .)"

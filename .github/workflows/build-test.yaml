@@ -1,0 +1,38 @@
+name: CI - Dagger Build & Test
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: build-and-test
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Dagger lint
+        uses: dagger/dagger-for-github@v8.4.1
+        with:
+          module: ./.dagger
+          call: lint --src . export --path=/tmp/lint-report.txt --progress plain
+          cloud-token: ${{ secrets.DAGGER_CLOUD_TOKEN }}
+
+      - name: Dagger build-and-test (unit + envtest)
+        uses: dagger/dagger-for-github@v8.4.1
+        with:
+          module: ./.dagger
+          call: build-and-test --src . --progress plain
+          cloud-token: ${{ secrets.DAGGER_CLOUD_TOKEN }}

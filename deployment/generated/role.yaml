@@ -1,0 +1,64 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: machinery-order-service
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - order.machinery.stuttgart-things.com
+  resources:
+  - managementclusters
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - order.machinery.stuttgart-things.com
+  resources:
+  - orders
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - order.machinery.stuttgart-things.com
+  resources:
+  - orders/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - order.machinery.stuttgart-things.com
+  resources:
+  - orders/status
+  verbs:
+  - get
+  - patch
+  - update

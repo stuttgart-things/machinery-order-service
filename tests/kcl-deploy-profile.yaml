@@ -1,0 +1,31 @@
+---
+# Example profile for `kcl run deployment -Y tests/kcl-deploy-profile.yaml`
+# and the release workflow (renders the kustomize base).
+config.image: ghcr.io/stuttgart-things/machinery-order-service:latest
+config.namespace: machinery-order-service
+config.claimApiUrl: http://claim-machinery-api.claim-machinery.svc.cluster.local:8080
+config.basePath: /orders
+config.httpRouteEnabled: true
+config.httpRouteParentRefName: sthings-gateway
+config.httpRouteParentRefNamespace: default
+config.httpRouteHostname: machinery-order-service.example.sthings
+config.authOidcIssuer: https://zitadel.example.sthings
+config.authOidcAudience: machinery-order-service
+config.authTrustForwardedUser: true
+config.githubAppId: "123456"
+config.githubAppInstallationId: "7890123"
+config.githubAppSecretName: machinery-order-service-github-app
+config.existingSecretName: machinery-order-service-env
+config.managementClusters:
+  machinery:
+    lab: labda
+    gitops:
+      ordersPath: clusters/labda/vsphere/machinery-orders-xrs
+    render:
+      environmentConfig: labda
+    machinery:
+      endpoint: machinery-grpc.example.sthings:443
+      tokenSecretRef:
+        name: machinery-grpc
+    flux:
+      name: machinery-orders-xrs

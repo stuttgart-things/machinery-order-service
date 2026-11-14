@@ -1,0 +1,20 @@
+{
+  "name": "dagger",
+  "engineVersion": "v0.21.11",
+  "sdk": {
+    "source": "go"
+  },
+  "dependencies": [
+    {
+      "name": "go",
+      "source": "github.com/stuttgart-things/dagger/go@v0.139.0",
+      "pin": "2eb065a19df524e4aa2f509b4fedb5012b782bc7"
+    },
+    {
+      "name": "trivy",
+      "source": "github.com/stuttgart-things/dagger/trivy@v0.139.0",
+      "pin": "2eb065a19df524e4aa2f509b4fedb5012b782bc7"
+    }
+  ],
+  "source": ".dagger"
+}

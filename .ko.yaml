@@ -1,0 +1,16 @@
+---
+# Static Go binary, no KCL or shell needed: distroless static, nonroot.
+defaultBaseImage: cgr.dev/chainguard/static:latest
+builds:
+  - id: machinery-order-service
+    main: .
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s
+      - -w
+      - -X github.com/stuttgart-things/machinery-order-service/internal/version.Version={{.Env.VERSION}}
+      - -X github.com/stuttgart-things/machinery-order-service/internal/version.Commit={{.Env.COMMIT}}
+      - -X github.com/stuttgart-things/machinery-order-service/internal/version.BuildDate={{.Env.BUILD_DATE}}
