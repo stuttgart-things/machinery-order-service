@@ -53,8 +53,10 @@ API (`apiRunnable`, every replica).
   `file.modpath()`; `task generate` refreshes them and
   `.github/workflows/check-generated.yaml` fails on drift.
 - Options are `config.<field>` of `schema.k`; the example profile is
-  `tests/kcl-deploy-profile.yaml` (flat keys, as the Dagger KCL module and the
-  release workflow read it). Locally: `kcl run deployment -D config.claimApiUrl=...`.
+  `tests/kcl-deploy-profile.yaml` (`task render`), the release renders the
+  neutral `tests/kcl-release-profile.yaml` (no ManagementClusters, route, auth
+  or GitHub App; clusters patch those in with Flux). Flat keys, as the Dagger
+  KCL module and the release workflow read them. Locally: `kcl run deployment -D config.claimApiUrl=...`.
 - `.dagger/`: lint, build, build-and-test (setup-envtest in the container),
   build-image (ko, `.ko.yaml`), scan-image (Trivy). Image base: distroless
   static; version via `internal/version` ldflags.

@@ -53,13 +53,13 @@ func TestOrderLifecycle(t *testing.T) {
 	}
 
 	// Flux at a revision before the merge: still Merged.
-	e.machinery.Set("Kustomization", "flux-system", "machinery-orders-xrs", machinery.Resource{Info: map[string]string{"lastAppliedRevision": "main@sha1:" + pulls[0].HeadSHA}})
+	e.machinery.Set("Kustomization", "flux-system", "machinery-orders-xrs", machinery.Resource{Info: map[string]string{"Revision": "main@sha1:" + pulls[0].HeadSHA}})
 	e.wait(t, "ord-000000000001", "waiting for Flux", func(o *v1alpha1.Order) bool {
 		return o.Status.Phase == v1alpha1.PhaseMerged && strings.Contains(o.Status.Message, "waiting for")
 	})
 	// Flux past the merge: Applied, then Building once machinery sees the XR.
 	later := e.git.Advance()
-	e.machinery.Set("Kustomization", "flux-system", "machinery-orders-xrs", machinery.Resource{Info: map[string]string{"lastAppliedRevision": "main@sha1:" + later}})
+	e.machinery.Set("Kustomization", "flux-system", "machinery-orders-xrs", machinery.Resource{Info: map[string]string{"Revision": "main@sha1:" + later}})
 	e.wait(t, "ord-000000000001", "Applied", phase(v1alpha1.PhaseApplied))
 	e.machinery.Set("NativeVsphereVM", "default", "demo-vm", machinery.Resource{StatusMessage: "cloning"})
 	e.wait(t, "ord-000000000001", "Building", phase(v1alpha1.PhaseBuilding))

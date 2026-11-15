@@ -22,7 +22,7 @@ jobs:
       stage-image: true
       push-kustomize: true
       kcl-source-dir: deployment
-      kcl-profile-file: tests/kcl-deploy-profile.yaml
+      kcl-profile-file: tests/kcl-release-profile.yaml
       kustomize-oci-repo: ghcr.io/stuttgart-things/machinery-order-service-kustomize
       # The kustomize base pins the released image.
       kustomize-image-key: config.image

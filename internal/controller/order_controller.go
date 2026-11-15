@@ -387,7 +387,7 @@ func (r *OrderReconciler) followApply(ctx context.Context, o *v1alpha1.Order) (c
 		ns = "flux-system"
 	}
 	if field == "" {
-		field = "lastAppliedRevision"
+		field = "Revision"
 	}
 	k, err := mcl.Get(ctx, kind, f.Name, ns)
 	if err != nil {
