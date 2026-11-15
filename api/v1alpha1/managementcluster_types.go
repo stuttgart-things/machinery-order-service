@@ -72,9 +72,11 @@ type Flux struct {
 	// +kubebuilder:default=flux-system
 	// +optional
 	Namespace string `json:"namespace,omitempty"`
-	// RevisionField is the machinery info field holding
-	// status.lastAppliedRevision.
-	// +kubebuilder:default=lastAppliedRevision
+	// RevisionField is the label of the machinery info field holding
+	// status.lastAppliedRevision. machinery keys info fields by label; the
+	// shared watch config (stuttgart-things/flux cicd/machinery) uses
+	// "Revision".
+	// +kubebuilder:default=Revision
 	// +optional
 	RevisionField string `json:"revisionField,omitempty"`
 }

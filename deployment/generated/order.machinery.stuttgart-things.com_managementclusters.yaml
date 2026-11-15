@@ -76,10 +76,12 @@ spec:
                     default: flux-system
                     type: string
                   revisionField:
-                    default: lastAppliedRevision
+                    default: Revision
                     description: |-
-                      RevisionField is the machinery info field holding
-                      status.lastAppliedRevision.
+                      RevisionField is the label of the machinery info field holding
+                      status.lastAppliedRevision. machinery keys info fields by label; the
+                      shared watch config (stuttgart-things/flux cicd/machinery) uses
+                      "Revision".
                     type: string
                 required:
                 - name

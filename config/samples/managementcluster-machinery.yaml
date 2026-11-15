@@ -18,7 +18,8 @@ spec:
       name: machinery-grpc
       key: token
   # Needs machinery to watch Flux Kustomizations with
-  # infoFields [{label: lastAppliedRevision, path: status.lastAppliedRevision}].
+  # infoFields [{label: Revision, path: status.lastAppliedRevision}]
+  # (the shared watch config does); otherwise set revisionField to the label.
   flux:
     name: machinery-orders-xrs
     namespace: flux-system

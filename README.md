@@ -81,8 +81,10 @@ Group `order.machinery.stuttgart-things.com/v1alpha1`, CRDs in
 
 The live side comes from machinery's gRPC `GetResourceDetail` (kind + name of
 the rendered XR). The Applied check reads the Flux Kustomization through
-machinery too, so machinery has to watch it with an info field
-`lastAppliedRevision` (`status.lastAppliedRevision`). Without `spec.flux` an
+machinery too, so machinery has to watch it with an info field labelled
+`Revision` for `status.lastAppliedRevision` (the shared watch config in
+stuttgart-things/flux `cicd/machinery` does; another label goes in
+`spec.flux.revisionField`). Without `spec.flux` an
 order goes from Merged to Building once machinery sees its XR.
 
 ## Configuration
