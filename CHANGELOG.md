@@ -1,3 +1,13 @@
+## [0.1.1](https://github.com/stuttgart-things/machinery-order-service/compare/v0.1.0...v0.1.1) (2026-11-15)
+
+
+### Bug Fixes
+
+* **controller:** default flux.revisionField to the watch config's label Revision ([4a63ba9](https://github.com/stuttgart-things/machinery-order-service/commit/4a63ba98d2cbf03fd961d172bc56c5e8354cb298))
+* **dagger:** build-image with the go.mod toolchain and the ko ldflag variables ([9fc0f95](https://github.com/stuttgart-things/machinery-order-service/commit/9fc0f95145ea1d7218dacf62cd844b026bea92fc))
+* **deps:** golang.org/x/net v0.62.0 (CVE-2026-78661) ([b769cea](https://github.com/stuttgart-things/machinery-order-service/commit/b769cea6c36e1dd5218e82621e3386fc12780cd0))
+* **release:** render the kustomize base from a neutral profile ([e13db2c](https://github.com/stuttgart-things/machinery-order-service/commit/e13db2ca974993a113103b8b70bd332286c1c4c8))
+
 # [0.1.0](https://github.com/stuttgart-things/machinery-order-service/compare/v0.0.0...v0.1.0) (2026-11-14)
 
 
