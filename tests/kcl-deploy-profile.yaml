@@ -1,6 +1,6 @@
 ---
 # Example profile for `kcl run deployment -Y tests/kcl-deploy-profile.yaml`
-# and the release workflow (renders the kustomize base).
+# (task render). The release renders tests/kcl-release-profile.yaml.
 config.image: ghcr.io/stuttgart-things/machinery-order-service:latest
 config.namespace: machinery-order-service
 config.claimApiUrl: http://claim-machinery-api.claim-machinery.svc.cluster.local:8080

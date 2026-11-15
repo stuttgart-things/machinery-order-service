@@ -1,0 +1,11 @@
+---
+# Profile of the released kustomize base
+# (ghcr.io/stuttgart-things/machinery-order-service-kustomize). Neutral on
+# purpose: no ManagementClusters, no route, no auth, no GitHub App. Each
+# cluster adds those with Flux patches (ConfigMap values, the github-app
+# volume, its own HTTPRoute, ManagementCluster objects), as for
+# claim-machinery-api and clusterbook in stuttgart-things/flux.
+# config.image is pinned to the released image by the release workflow.
+config.image: ghcr.io/stuttgart-things/machinery-order-service:latest
+config.namespace: machinery-order-service
+config.claimApiUrl: http://claim-machinery-api.claim-machinery.svc.cluster.local:8080
