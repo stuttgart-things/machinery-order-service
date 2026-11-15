@@ -5,6 +5,7 @@ import (
 	"dagger/dagger/internal/dagger"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // koBuildWithConfig builds a container image using ko, respecting .ko.yaml configuration.
@@ -20,11 +21,23 @@ func (m *Dagger) koBuildWithConfig(
 	token *dagger.Secret,
 	tag string,
 ) (string, error) {
+	version := tag
+	if version == "" {
+		version = "dev"
+	}
 	ctr := dag.Container().
 		From(fmt.Sprintf("ghcr.io/ko-build/ko:%s", koVersion)).
 		WithMountedDirectory("/src", src).
 		WithWorkdir("/src").
-		WithEnvVariable("KO_DOCKER_REPO", repo)
+		WithEnvVariable("KO_DOCKER_REPO", repo).
+		// The ko image ships an older Go and sets GOTOOLCHAIN=local; let go
+		// fetch the toolchain go.mod asks for.
+		WithEnvVariable("GOTOOLCHAIN", "auto").
+		WithMountedCache("/root/go/pkg/mod", dag.CacheVolume("ko-go-mod")).
+		// .ko.yaml's ldflags read these; the release workflow sets them.
+		WithEnvVariable("VERSION", version).
+		WithEnvVariable("COMMIT", "unknown").
+		WithEnvVariable("BUILD_DATE", time.Now().UTC().Format(time.RFC3339))
 
 	// Configure registry auth when pushing to ghcr.io
 	if token != nil && push == "true" && strings.Contains(repo, "ghcr.io") {
