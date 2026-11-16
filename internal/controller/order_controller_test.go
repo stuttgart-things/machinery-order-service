@@ -7,6 +7,7 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -83,6 +84,24 @@ func TestOrderLifecycle(t *testing.T) {
 		if seen[i] != want[i] {
 			t.Errorf("history %v", seen)
 		}
+	}
+
+	// The XR goes (a teardown): Deleted, with the last address kept.
+	e.machinery.Delete("NativeVsphereVM", "default", "demo-vm")
+	o = e.wait(t, "ord-000000000001", "Deleted", phase(v1alpha1.PhaseDeleted))
+	if l := o.Status.Live; l == nil || l.Found || l.Address != "10.31.103.7" || l.LastSeenAt == nil {
+		t.Errorf("live after the XR went %+v", l)
+	}
+	if c := meta.FindStatusCondition(o.Status.Conditions, controller.ConditionLive); c == nil || c.Reason != "Gone" {
+		t.Errorf("live condition %+v", c)
+	}
+	// ... and comes back: the order follows it again.
+	e.machinery.Set("NativeVsphereVM", "default", "demo-vm", machinery.Resource{Ready: true, Address: "10.31.103.8"})
+	o = e.wait(t, "ord-000000000001", "Ready again", func(o *v1alpha1.Order) bool {
+		return o.Status.Phase == v1alpha1.PhaseReady && o.Status.Live != nil && o.Status.Live.Address == "10.31.103.8"
+	})
+	if n := len(o.Status.History); n != 9 || o.Status.History[7].Phase != v1alpha1.PhaseDeleted {
+		t.Errorf("history %+v", o.Status.History)
 	}
 
 	// Deleting a merged order touches nothing: the finalizer just goes.

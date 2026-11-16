@@ -19,17 +19,21 @@ const (
 )
 
 // Phase is where an order stands, across git and the live side.
-// +kubebuilder:validation:Enum=Ordered;Placed;PROpen;Merged;Applied;Building;Ready;Cancelled;Failed
+// +kubebuilder:validation:Enum=Ordered;Placed;PROpen;Merged;Applied;Building;Ready;Deleted;Cancelled;Failed
 type Phase string
 
 const (
-	PhaseOrdered   Phase = "Ordered"
-	PhasePlaced    Phase = "Placed"
-	PhasePROpen    Phase = "PROpen"
-	PhaseMerged    Phase = "Merged"
-	PhaseApplied   Phase = "Applied"
-	PhaseBuilding  Phase = "Building"
-	PhaseReady     Phase = "Ready"
+	PhaseOrdered  Phase = "Ordered"
+	PhasePlaced   Phase = "Placed"
+	PhasePROpen   Phase = "PROpen"
+	PhaseMerged   Phase = "Merged"
+	PhaseApplied  Phase = "Applied"
+	PhaseBuilding Phase = "Building"
+	PhaseReady    Phase = "Ready"
+	// PhaseDeleted: the XR was Ready and machinery no longer sees it (a
+	// teardown, or the XR got lost). Not terminal: should the XR come back,
+	// the order follows it again.
+	PhaseDeleted   Phase = "Deleted"
 	PhaseCancelled Phase = "Cancelled"
 	PhaseFailed    Phase = "Failed"
 )
@@ -186,6 +190,10 @@ type LiveStatus struct {
 	Info map[string]string `json:"info,omitempty"`
 	// +optional
 	ObservedAt *metav1.Time `json:"observedAt,omitempty"`
+	// LastSeenAt is when machinery last saw the XR. Once it is gone, address
+	// and info keep what it reported then.
+	// +optional
+	LastSeenAt *metav1.Time `json:"lastSeenAt,omitempty"`
 }
 
 // PhaseTransition is one step of the order's timeline.

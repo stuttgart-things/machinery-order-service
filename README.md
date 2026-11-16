@@ -38,6 +38,7 @@ merge its pull request is closed, after the merge only the record goes.
 | `Applied` | the cluster's Flux Kustomization is at or past the merge |
 | `Building` | machinery sees the XR, not Ready yet |
 | `Ready` | machinery reports the XR Ready (`status.live`: address, info) |
+| `Deleted` | the XR was Ready and machinery no longer sees it (teardown, or lost). `status.live` keeps the last address and info, `lastSeenAt` says when; should the XR come back, the order follows it again |
 | `Cancelled` | cancelled before the merge, or the PR was closed unmerged |
 | `Failed` | cannot go on as is: invalid parameters, a taken name or branch, cordoned cluster |
 

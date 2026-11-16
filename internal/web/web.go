@@ -237,7 +237,7 @@ func phaseClass(p v1alpha1.Phase) string {
 		return "ok"
 	case v1alpha1.PhaseFailed:
 		return "bad"
-	case v1alpha1.PhaseCancelled:
+	case v1alpha1.PhaseCancelled, v1alpha1.PhaseDeleted:
 		return "muted"
 	case "":
 		return "muted"
@@ -275,7 +275,7 @@ func timeline(o *v1alpha1.Order) []step {
 		}
 		out = append(out, s)
 	}
-	if o.Status.Phase.Terminal() {
+	if o.Status.Phase.Terminal() || o.Status.Phase == v1alpha1.PhaseDeleted {
 		h := seen[o.Status.Phase]
 		out = append(out, step{Phase: o.Status.Phase, State: "current", Time: h.Time.UTC().Format(time.DateTime), Message: h.Message})
 	}

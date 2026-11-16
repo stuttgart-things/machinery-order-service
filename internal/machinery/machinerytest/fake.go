@@ -30,6 +30,13 @@ func (f *Fake) Set(kind, namespace, name string, r machinery.Resource) {
 	f.objects[key(kind, namespace, name)] = r
 }
 
+// Delete removes an object: machinery no longer sees it.
+func (f *Fake) Delete(kind, namespace, name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.objects, key(kind, namespace, name))
+}
+
 // Dial implements machinery.Dialer.
 func (f *Fake) Dial(ep machinery.Endpoint) (machinery.Client, error) {
 	f.mu.Lock()

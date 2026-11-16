@@ -302,6 +302,7 @@ spec:
                       - Applied
                       - Building
                       - Ready
+                      - Deleted
                       - Cancelled
                       - Failed
                       type: string
@@ -327,6 +328,12 @@ spec:
                       type: string
                     description: Info are machinery's extra status fields.
                     type: object
+                  lastSeenAt:
+                    description: |-
+                      LastSeenAt is when machinery last saw the XR. Once it is gone, address
+                      and info keep what it reported then.
+                    format: date-time
+                    type: string
                   observedAt:
                     format: date-time
                     type: string
@@ -358,6 +365,7 @@ spec:
                 - Applied
                 - Building
                 - Ready
+                - Deleted
                 - Cancelled
                 - Failed
                 type: string

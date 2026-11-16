@@ -202,7 +202,7 @@ func (r *OrderReconciler) advance(ctx context.Context, o *v1alpha1.Order) (ctrl.
 	case v1alpha1.PhaseMerged:
 		return r.followApply(ctx, o)
 
-	case v1alpha1.PhaseApplied, v1alpha1.PhaseBuilding, v1alpha1.PhaseReady:
+	case v1alpha1.PhaseApplied, v1alpha1.PhaseBuilding, v1alpha1.PhaseReady, v1alpha1.PhaseDeleted:
 		return r.followLive(ctx, o)
 	}
 	return ctrl.Result{}, nil
@@ -451,14 +451,30 @@ func (r *OrderReconciler) live(ctx context.Context, o *v1alpha1.Order, mcl machi
 		return ctrl.Result{}, err
 	}
 	now := metav1.Now()
-	o.Status.Live = &v1alpha1.LiveStatus{
-		Found: res.Found, Ready: res.Ready, StatusMessage: res.StatusMessage,
-		Address: res.Address, Info: res.Info, ObservedAt: &now,
+	// Once the XR was Ready, its absence means it is gone, not "not yet".
+	wasReady := o.Status.Phase == v1alpha1.PhaseReady || o.Status.Phase == v1alpha1.PhaseDeleted
+	if res.Found {
+		o.Status.Live = &v1alpha1.LiveStatus{
+			Found: true, Ready: res.Ready, StatusMessage: res.StatusMessage,
+			Address: res.Address, Info: res.Info, ObservedAt: &now, LastSeenAt: &now,
+		}
+	} else {
+		// Keep the last address and info: a gone VM's IP is still worth
+		// knowing (DNS, inventory, ssh known_hosts).
+		live := &v1alpha1.LiveStatus{}
+		if wasReady && o.Status.Live != nil {
+			live = o.Status.Live.DeepCopy()
+		}
+		live.Found, live.Ready, live.StatusMessage, live.ObservedAt = false, false, "", &now
+		o.Status.Live = live
 	}
 	cond := metav1.Condition{Type: ConditionLive, Status: metav1.ConditionFalse, Reason: "NotFound",
 		Message: fmt.Sprintf("machinery does not see %s %s yet", x.Kind, x.Name), ObservedGeneration: o.Generation}
-	if res.Found {
+	switch {
+	case res.Found:
 		cond.Status, cond.Reason, cond.Message = metav1.ConditionTrue, "Observed", res.StatusMessage
+	case wasReady:
+		cond.Reason, cond.Message = "Gone", fmt.Sprintf("machinery no longer sees %s %s", x.Kind, x.Name)
 	}
 	meta.SetStatusCondition(&o.Status.Conditions, cond)
 
@@ -473,6 +489,9 @@ func (r *OrderReconciler) live(ctx context.Context, o *v1alpha1.Order, mcl machi
 			SetPhase(o, v1alpha1.PhaseBuilding, res.StatusMessage)
 		}
 		return ctrl.Result{RequeueAfter: r.LivePoll}, nil
+	case wasReady:
+		SetPhase(o, v1alpha1.PhaseDeleted, fmt.Sprintf("%s %s is gone: machinery no longer sees it", x.Kind, x.Name))
+		return ctrl.Result{RequeueAfter: r.ReadyPoll}, nil
 	}
 	return ctrl.Result{RequeueAfter: r.LivePoll}, nil
 }

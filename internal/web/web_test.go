@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -146,5 +147,21 @@ func TestForwardedUserAndCancel(t *testing.T) {
 	_ = c.Get(context.Background(), client.ObjectKey{Namespace: "orders", Name: "ord-a"}, o)
 	if !o.Spec.Cancel {
 		t.Error("not cancelled")
+	}
+}
+
+func TestDeletedOrderShowsGone(t *testing.T) {
+	o := order("ord-g", "user:default/alice", v1alpha1.PhaseDeleted)
+	seen := metav1.NewTime(metav1.Now().Add(-time.Hour))
+	o.Status.Live = &v1alpha1.LiveStatus{Found: false, Address: "10.0.0.9", LastSeenAt: &seen}
+	h, _ := handler(t, nil, o)
+	for _, p := range []string{"/orders/ui/", "/orders/ui/orders/ord-g"} {
+		code, body := get(t, h, p, nil)
+		if code != 200 || !strings.Contains(body, ">gone<") || !strings.Contains(body, "10.0.0.9") || strings.Contains(body, "not seen") {
+			t.Errorf("%s: %d\n%s", p, code, body)
+		}
+	}
+	if _, d := get(t, h, "/orders/ui/orders/ord-g", nil); !strings.Contains(d, "last seen "+seen.UTC().Format(time.DateTime)) || !strings.Contains(d, "<strong>Deleted</strong>") {
+		t.Error("detail: no last seen or no Deleted in the timeline")
 	}
 }
