@@ -3,14 +3,7 @@
 
 ### Bug Fixes
 
-* **controller:** phase Deleted when a Ready XR is gone, keep the last live status ([0eb7459](https://github.com/stuttgart-things/machinery-order-service/commit/0eb74594b0bb1b3eed7b14b8929af9dc9d5f2ac8)), closes [stuttgart-things/stuttgart-things#4297](https://github.com/stuttgart-things/stuttgart-things/issues/4297) [#4557](https://github.com/stuttgart-things/machinery-order-service/issues/4557)
-
-## [0.1.2](https://github.com/stuttgart-things/machinery-order-service/compare/v0.1.1...v0.1.2) (2026-11-16)
-
-
-### Bug Fixes
-
-* **controller:** phase Deleted when a Ready XR is gone, keep the last live status ([0eb7459](https://github.com/stuttgart-things/machinery-order-service/commit/0eb74594b0bb1b3eed7b14b8929af9dc9d5f2ac8)), closes [stuttgart-things/stuttgart-things#4297](https://github.com/stuttgart-things/stuttgart-things/issues/4297) [#4557](https://github.com/stuttgart-things/machinery-order-service/issues/4557)
+* **controller:** phase Deleted when a Ready XR is gone, keep the last live status ([0eb7459](https://github.com/stuttgart-things/machinery-order-service/commit/0eb74594b0bb1b3eed7b14b8929af9dc9d5f2ac8)), closes [stuttgart-things/stuttgart-things#4297](https://github.com/stuttgart-things/stuttgart-things/issues/4297) [stuttgart-things/stuttgart-things#4557](https://github.com/stuttgart-things/stuttgart-things/issues/4557)
 
 ## [0.1.1](https://github.com/stuttgart-things/machinery-order-service/compare/v0.1.0...v0.1.1) (2026-11-15)
 
