@@ -1,3 +1,10 @@
+# [0.2.0](https://github.com/stuttgart-things/machinery-order-service/compare/v0.1.3...v0.2.0) (2026-11-16)
+
+
+### Features
+
+* **web:** orders fragment for the sthings-portal overview ([307bddf](https://github.com/stuttgart-things/machinery-order-service/commit/307bddfc02e0dc861abad81f59b544e316d4e32c))
+
 ## [0.1.3](https://github.com/stuttgart-things/machinery-order-service/compare/v0.1.2...v0.1.3) (2026-11-16)
 
 
