@@ -36,7 +36,7 @@ type machineryServer struct {
 
 func (m *machineryServer) GetResourceDetail(_ context.Context, r *maschinist.ResourceDetailRequest) (*maschinist.ResourceStatus, error) {
 	if r.Kind == "NativeVsphereVM" && r.Name == "e2e-vm" {
-		return &maschinist.ResourceStatus{Name: r.Name, Kind: r.Kind, Ready: m.ready, ConnectionDetails: "10.31.103.42"}, nil
+		return &maschinist.ResourceStatus{Name: r.Name, Kind: r.Kind, Ready: m.ready, ConnectionDetails: "10.31.103.42 | started=true, ansibleSucceeded=True"}, nil
 	}
 	return nil, status.Error(codes.NotFound, "no")
 }
@@ -181,7 +181,7 @@ func TestServe(t *testing.T) {
 	waitFor(t, "Building", func() bool { return order().Status.Phase == v1alpha1.PhaseBuilding })
 	ms.ready = true
 	waitFor(t, "Ready", func() bool { return order().Status.Phase == v1alpha1.PhaseReady })
-	if o := order(); o.Status.Live == nil || o.Status.Live.Address != "10.31.103.42" {
+	if o := order(); o.Status.Live == nil || o.Status.Live.Address != "10.31.103.42" || o.Status.Live.Info["ansibleSucceeded"] != "True" {
 		t.Errorf("live %+v", o.Status.Live)
 	}
 	resp, err = http.Get(base + "/ui/")

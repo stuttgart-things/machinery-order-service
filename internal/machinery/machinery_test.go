@@ -2,6 +2,7 @@ package machinery_test
 
 import (
 	"context"
+	"maps"
 	"net"
 	"testing"
 
@@ -27,7 +28,7 @@ func (f *fakeServer) GetResourceDetail(ctx context.Context, r *maschinist.Resour
 	if r.Name != "demo-vm" {
 		return nil, status.Error(codes.NotFound, "no")
 	}
-	return &maschinist.ResourceStatus{Name: r.Name, Kind: r.Kind, Ready: true, ConnectionDetails: "10.0.0.5", InfoFields: map[string]string{"ansible": "Ready"}}, nil
+	return &maschinist.ResourceStatus{Name: r.Name, Kind: r.Kind, Ready: true, ConnectionDetails: "10.0.0.5 | started=true, ansibleSucceeded=True", InfoFields: map[string]string{"ansible": "Ready"}}, nil
 }
 
 func TestGRPCClient(t *testing.T) {
@@ -48,7 +49,8 @@ func TestGRPCClient(t *testing.T) {
 		t.Fatal(err)
 	}
 	r, err := c.Get(context.Background(), "NativeVsphereVM", "demo-vm", "default")
-	if err != nil || !r.Found || !r.Ready || r.Address != "10.0.0.5" || r.Info["ansible"] != "Ready" {
+	if err != nil || !r.Found || !r.Ready || r.Address != "10.0.0.5" || r.Info["ansible"] != "Ready" ||
+		r.Info["started"] != "true" || r.Info["ansibleSucceeded"] != "True" {
 		t.Fatalf("get: %+v %v", r, err)
 	}
 	if fs.auth != "Bearer t0k" {
@@ -57,5 +59,24 @@ func TestGRPCClient(t *testing.T) {
 	r, err = c.Get(context.Background(), "NativeVsphereVM", "other", "default")
 	if err != nil || r.Found {
 		t.Errorf("missing: %+v %v", r, err)
+	}
+}
+
+func TestSplitConnection(t *testing.T) {
+	for _, c := range []struct {
+		in, addr string
+		fields   map[string]string
+	}{
+		{"10.31.102.236 | started=true, ansibleSucceeded=True", "10.31.102.236", map[string]string{"started": "true", "ansibleSucceeded": "True"}},
+		{"10.0.0.5", "10.0.0.5", map[string]string{}},
+		{"", "", map[string]string{}},
+		{"started=true, ansibleSucceeded=False", "", map[string]string{"started": "true", "ansibleSucceeded": "False"}},
+		{"https://vm.example/?a=b", "https://vm.example/?a=b", map[string]string{}},
+		{"10.0.0.5 | phase=Ready, message=a, b", "10.0.0.5", map[string]string{"phase": "Ready", "message": "a, b"}},
+	} {
+		addr, fields := machinery.SplitConnection(c.in)
+		if addr != c.addr || !maps.Equal(fields, c.fields) {
+			t.Errorf("%q: got %q %v, want %q %v", c.in, addr, fields, c.addr, c.fields)
+		}
 	}
 }

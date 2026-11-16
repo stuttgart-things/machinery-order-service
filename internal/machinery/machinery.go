@@ -13,6 +13,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,9 +30,42 @@ type Resource struct {
 	Found         bool
 	Ready         bool
 	StatusMessage string
-	// Address is machinery's connection details (a VM's IP).
+	// Address is the connection field of machinery's connection details
+	// (a VM's IP), without the status fields machinery appends to it.
 	Address string
-	Info    map[string]string
+	// Info are machinery's info fields plus the status fields from the
+	// connection details (e.g. started, ansibleSucceeded).
+	Info map[string]string
+}
+
+// SplitConnection splits machinery's connection details,
+// "<connection> | <label>=<value>, ...", into the connection itself and
+// the status fields. machinery leaves out the connection part when the
+// connection field is empty, and the status part when there are none.
+func SplitConnection(details string) (address string, fields map[string]string) {
+	fields = map[string]string{}
+	address, extra, found := strings.Cut(details, " | ")
+	if !found {
+		for _, part := range strings.Split(details, ", ") {
+			if k, _, ok := strings.Cut(part, "="); !ok || strings.TrimSpace(k) == "" || strings.ContainsAny(k, "/:?") {
+				return strings.TrimSpace(details), fields
+			}
+		}
+		// no connection part, only status fields
+		address, extra = "", details
+	}
+	last := ""
+	for _, part := range strings.Split(extra, ", ") {
+		k, v, ok := strings.Cut(part, "=")
+		if k = strings.TrimSpace(k); ok && k != "" {
+			fields[k] = strings.TrimSpace(v)
+			last = k
+		} else if last != "" {
+			// a value that contains ", " itself
+			fields[last] += ", " + part
+		}
+	}
+	return strings.TrimSpace(address), fields
 }
 
 // Client reads one object.
@@ -124,11 +158,19 @@ func (c *grpcClient) Get(ctx context.Context, kind, name, namespace string) (*Re
 		}
 		return nil, fmt.Errorf("machinery: %s/%s: %w", kind, name, err)
 	}
+	address, info := SplitConnection(st.GetConnectionDetails())
+	// machinery's own info fields win over a status field of the same name
+	for k, v := range st.GetInfoFields() {
+		info[k] = v
+	}
+	if len(info) == 0 {
+		info = nil
+	}
 	return &Resource{
 		Found:         true,
 		Ready:         st.GetReady(),
 		StatusMessage: st.GetStatusMessage(),
-		Address:       st.GetConnectionDetails(),
-		Info:          st.GetInfoFields(),
+		Address:       address,
+		Info:          info,
 	}, nil
 }
