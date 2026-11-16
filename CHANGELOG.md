@@ -1,3 +1,11 @@
+## [0.1.3](https://github.com/stuttgart-things/machinery-order-service/compare/v0.1.2...v0.1.3) (2026-11-16)
+
+
+### Bug Fixes
+
+* pass the orderer to the render as requested_by ([f4b1cac](https://github.com/stuttgart-things/machinery-order-service/commit/f4b1cacbacd17e4a20674e8bce0616fe2f198ac7)), closes [#5](https://github.com/stuttgart-things/machinery-order-service/issues/5)
+* split machinery's connection details into address and info ([0546bec](https://github.com/stuttgart-things/machinery-order-service/commit/0546bec884fa4eabbe90a8b187eba802a0448ba9)), closes [#6](https://github.com/stuttgart-things/machinery-order-service/issues/6)
+
 ## [0.1.2](https://github.com/stuttgart-things/machinery-order-service/compare/v0.1.1...v0.1.2) (2026-11-16)
 
 
