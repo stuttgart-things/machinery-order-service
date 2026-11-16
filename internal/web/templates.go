@@ -61,7 +61,7 @@ const rowDef = `{{define "row"}}<tr id="row-{{.Name}}">
   <td>{{.Spec.Placement.ManagementCluster}}</td>
   <td><span class="pill {{phaseClass .Status.Phase}}">{{if .Status.Phase}}{{.Status.Phase}}{{else}}Pending{{end}}</span></td>
   <td>{{with .Status.Delivery}}{{with .PullRequest}}<a href="{{.URL}}" target="_blank" rel="noopener">#{{.Number}}</a> <span class="muted">{{.State}}</span>{{end}}{{end}}</td>
-  <td>{{with .Status.Live}}{{if .Ready}}<span class="pill ok">Ready</span>{{else if .Found}}<span class="pill busy">building</span>{{else}}<span class="muted">not seen</span>{{end}} {{with .Address}}<code>{{.}}</code>{{end}}{{else}}<span class="muted">–</span>{{end}}</td>
+  <td>{{$gone := eq .Status.Phase "Deleted"}}{{with .Status.Live}}{{if .Ready}}<span class="pill ok">Ready</span>{{else if .Found}}<span class="pill busy">building</span>{{else if $gone}}<span class="pill muted">gone</span>{{else}}<span class="muted">not seen</span>{{end}} {{with .Address}}<code>{{.}}</code>{{end}}{{else}}<span class="muted">–</span>{{end}}</td>
   <td class="muted">{{ago .CreationTimestamp.Time}}</td>
 </tr>{{end}}`
 
@@ -123,7 +123,7 @@ const detailBodyDef = `{{define "body"}}{{with .Order}}
     {{end}}
     {{with .Status.Flux}}<dt>Flux</dt><dd><code>{{.LastAppliedRevision}}</code></dd>{{end}}
     {{with .Status.XRRef}}<dt>XR</dt><dd><code>{{.Kind}} {{if .Namespace}}{{.Namespace}}/{{end}}{{.Name}}</code></dd>{{end}}
-    {{with .Status.Live}}<dt>Live</dt><dd>{{if .Ready}}<span class="pill ok">Ready</span>{{else if .Found}}<span class="pill busy">building</span>{{else}}<span class="muted">not seen by machinery yet</span>{{end}} {{with .Address}}<code>{{.}}</code>{{end}} <span class="muted">{{.StatusMessage}}</span></dd>
+    {{$gone := eq .Status.Phase "Deleted"}}{{with .Status.Live}}<dt>Live</dt><dd>{{if .Ready}}<span class="pill ok">Ready</span>{{else if .Found}}<span class="pill busy">building</span>{{else if $gone}}<span class="pill muted">gone</span>{{else}}<span class="muted">not seen by machinery yet</span>{{end}} {{with .Address}}<code>{{.}}</code>{{end}} <span class="muted">{{.StatusMessage}}{{if and $gone .LastSeenAt}}last seen {{.LastSeenAt.UTC.Format "2006-01-02 15:04:05"}}{{end}}</span></dd>
       {{$info := .Info}}{{range infoKeys .Info}}<dt>{{.}}</dt><dd><code>{{index $info .}}</code></dd>{{end}}{{end}}
   </dl>
 </div>
