@@ -56,3 +56,21 @@ func TestRender(t *testing.T) {
 		t.Errorf("want a 400 with fields, got %v", err)
 	}
 }
+
+func TestTemplate(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"metadata":{"name":"native-vm"},"spec":{"type":"xr-native-vm","parameters":[
+			{"name":"size","default":"medium"},
+			{"name":"requested_by","identity":"user"},
+			{"name":"owner","identity":"owner"}]}}`))
+	}))
+	defer srv.Close()
+	c := &render.Client{BaseURL: srv.URL}
+	tmpl, err := c.Template(context.Background(), "native-vm", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tmpl.Type != "xr-native-vm" || tmpl.Defaults["size"] != "medium" || tmpl.Identity["requested_by"] != "user" || tmpl.Identity["owner"] != "owner" || len(tmpl.Identity) != 2 {
+		t.Errorf("template %+v", tmpl)
+	}
+}

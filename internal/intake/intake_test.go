@@ -93,3 +93,57 @@ func TestParametersReserved(t *testing.T) {
 		t.Error("environment_config set without the cluster naming one")
 	}
 }
+
+// The orderer goes into the render as requested_by, so the VM file carries
+// the requested-by and owner annotations (#5).
+func TestRenderRequestedBy(t *testing.T) {
+	f := &rendertest.Fake{}
+	o := order(t, map[string]any{"name": "demo", "owner": "group:default/platform-team"})
+	rd, err := intake.Render(context.Background(), f, o, cluster(), "caller")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"stuttgart-things.com/requested-by: user:default/sthings",
+		"stuttgart-things.com/owner: group:default/platform-team",
+	} {
+		if !strings.Contains(rd.Files[0].Content, want) {
+			t.Errorf("%s missing:\n%s", want, rd.Files[0].Content)
+		}
+	}
+
+	// The same orderer may be given; another one is refused.
+	if _, err := intake.Parameters(order(t, map[string]any{"name": "x", "requested_by": "user:default/sthings"}), cluster()); err != nil {
+		t.Errorf("same requested_by: %v", err)
+	}
+	var ie *intake.InvalidError
+	if _, err := intake.Parameters(order(t, map[string]any{"name": "x", "requested_by": "user:default/other"}), cluster()); !errors.As(err, &ie) {
+		t.Errorf("other requested_by: want InvalidError, got %v", err)
+	}
+
+	// Without spec.requestedBy the service adds nothing.
+	o = order(t, map[string]any{"name": "x"})
+	o.Spec.RequestedBy = ""
+	if p, err := intake.Parameters(o, cluster()); err != nil || p["requested_by"] != nil {
+		t.Errorf("params %v %v", p, err)
+	}
+}
+
+// With the service's own token, a requested_by the template binds to the
+// login is left to claim-machinery-api; with the orderer's it is sent.
+func TestRenderRequestedByIdentityBound(t *testing.T) {
+	f := &rendertest.Fake{Identity: map[string]string{"requested_by": "user"}}
+	o := order(t, map[string]any{"name": "demo"})
+	if _, err := intake.Render(context.Background(), f, o, cluster(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := f.Params[0]["requested_by"]; ok {
+		t.Errorf("service token: requested_by sent: %v", f.Params[0])
+	}
+	if _, err := intake.Render(context.Background(), f, o, cluster(), "caller"); err != nil {
+		t.Fatal(err)
+	}
+	if f.Params[1]["requested_by"] != "user:default/sthings" {
+		t.Errorf("caller token: params %v", f.Params[1])
+	}
+}

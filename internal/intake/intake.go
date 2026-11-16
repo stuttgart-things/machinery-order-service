@@ -31,6 +31,10 @@ const (
 	ParamManagementCluster = "management_cluster"
 	ParamSourcePath        = "source_path"
 	ParamEnvironmentConfig = "environment_config"
+	// ParamRequestedBy is the orderer. The service fills it from
+	// spec.requestedBy; the templates derive the requested-by and owner
+	// annotations from it.
+	ParamRequestedBy = "requested_by"
 )
 
 // dnsLabel is a name that is a file name, a branch suffix and part of an
@@ -86,8 +90,9 @@ func Encode(params map[string]any) (*runtime.RawExtension, error) {
 }
 
 // Parameters are the orderer's parameters plus what the order and its
-// management cluster add: order_id, management_cluster, and, when the
-// cluster names them, source_path and environment_config.
+// management cluster add: order_id, management_cluster, requested_by (from
+// spec.requestedBy) and, when the cluster names them, source_path and
+// environment_config.
 func Parameters(o *v1alpha1.Order, mc *v1alpha1.ManagementCluster) (map[string]any, error) {
 	params, err := UserParameters(o)
 	if err != nil {
@@ -97,6 +102,12 @@ func Parameters(o *v1alpha1.Order, mc *v1alpha1.ManagementCluster) (map[string]a
 		if _, ok := params[k]; ok {
 			return nil, &InvalidError{Msg: fmt.Sprintf("parameter %s is set by the service; leave it out", k)}
 		}
+	}
+	if rb := o.Spec.RequestedBy; rb != "" {
+		if v, ok := params[ParamRequestedBy]; ok && v != rb {
+			return nil, &InvalidError{Msg: fmt.Sprintf("parameter %s is the orderer (%s); leave it out", ParamRequestedBy, rb)}
+		}
+		params[ParamRequestedBy] = rb
 	}
 	params[ParamOrderID] = o.Name
 	cluster := mc.Spec.Render.ClusterName
@@ -126,10 +137,23 @@ func Parameters(o *v1alpha1.Order, mc *v1alpha1.ManagementCluster) (map[string]a
 
 // Render renders the order for its management cluster. callerToken is the
 // orderer's bearer token ("" = the service's own).
+//
+// With the service's own token, requested_by is left out when the template
+// binds it to the login: claim-machinery-api with order auth refuses a value
+// that is not the caller's, and the caller is then the service.
 func Render(ctx context.Context, r Renderer, o *v1alpha1.Order, mc *v1alpha1.ManagementCluster, callerToken string) (*v1alpha1.Rendered, error) {
 	params, err := Parameters(o, mc)
 	if err != nil {
 		return nil, err
+	}
+	if _, ok := params[ParamRequestedBy]; ok && callerToken == "" {
+		tmpl, err := r.Template(ctx, o.Spec.Template, "")
+		if err != nil {
+			return nil, err
+		}
+		if tmpl.Identity[ParamRequestedBy] != "" {
+			delete(params, ParamRequestedBy)
+		}
 	}
 	out, err := r.Render(ctx, o.Spec.Template, params, callerToken)
 	if err != nil {
