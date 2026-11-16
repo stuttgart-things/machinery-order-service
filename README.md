@@ -53,10 +53,18 @@ merge its pull request is closed, after the merge only the record goes.
 | `POST` | `/api/v1/orders/{id}/cancel` | `{"resourceVersion"}` optional: 409 when the order moved. Only before the merge |
 | `GET` | `/ui/` | **My orders**, live through SSE |
 | `GET` | `/ui/orders/{id}` | **Order detail**: timeline, files, PR/commit, order ID, Cancel |
+| `GET` | `/ui/manifest.json` | sthings-portal manifest (no login): title `Orders`, one fragment |
+| `GET` | `/ui/fragment/orders` | Portal overview fragment: the caller's orders open/ready/failed and the newest five, linked to their detail |
 | `GET` | `/health`, `/ready`, `/version` | |
 
 Everything answers at the root and under `BASE_PATH` (behind sthings-portal).
 The UI has no ordering form on purpose: orders come in through the API.
+
+On sthings-portal's overview the Orders card shows the fragment (portal
+README, "Fragments"): the portal reads the manifest with its health check and
+loads the fragment through its proxy every 10 s, so it is the logged-in
+user's orders. Unlike the pages, the fragment carries `BASE_PATH` in every URL,
+since it runs on the portal's overview without `<base href>`.
 
 ```bash
 curl -X POST "$URL/api/v1/orders" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{

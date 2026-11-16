@@ -165,3 +165,51 @@ func TestDeletedOrderShowsGone(t *testing.T) {
 		t.Error("detail: no last seen or no Deleted in the timeline")
 	}
 }
+
+// The portal fetches the manifest without a login; the fragment is the
+// caller's orders, with the prefix on every URL (no <base href> on the
+// portal's overview).
+func TestPortalFragment(t *testing.T) {
+	iss := authtest.NewIssuer(t)
+	a, err := auth.New(auth.Config{Issuer: iss.URL(), Audiences: []string{"x"}, CAFile: iss.CAFile, TrustForwardedUser: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mine := order("ord-a", "user:default/alice", v1alpha1.PhaseBuilding)
+	mine.Spec.Parameters = &runtime.RawExtension{Raw: []byte(`{"name":"vm-<alice>"}`)}
+	h, _ := handler(t, a, mine,
+		order("ord-b", "user:default/alice", v1alpha1.PhaseReady),
+		order("ord-c", "user:default/alice", v1alpha1.PhaseFailed),
+		order("ord-d", "user:default/bob", v1alpha1.PhaseReady))
+
+	code, m := get(t, h, "/orders/ui/manifest.json", nil)
+	if code != 200 || !strings.Contains(m, `"url":"/orders/ui/fragment/orders"`) || !strings.Contains(m, `"title":"Orders"`) {
+		t.Errorf("manifest: %d %s", code, m)
+	}
+
+	if code, f := get(t, h, "/orders/ui/fragment/orders", nil); code != 200 || !strings.Contains(f, "Sign in") || strings.Contains(f, "ord-") {
+		t.Errorf("fragment without login: %d %s", code, f)
+	}
+
+	code, f := get(t, h, "/orders/ui/fragment/orders", map[string]string{"X-Forwarded-User": "alice@sthings.example"})
+	if code != 200 {
+		t.Fatalf("fragment: %d", code)
+	}
+	for _, want := range []string{
+		"1 open · 1 ready · 1 failed",
+		`href="/orders/ui/orders/ord-a"`, "vm-&lt;alice&gt;", "hr-sev-info", "hr-sev-success", "hr-sev-error",
+		`href="/orders/ui/"`,
+	} {
+		if !strings.Contains(f, want) {
+			t.Errorf("fragment misses %q:\n%s", want, f)
+		}
+	}
+	if strings.Contains(f, "ord-d") || strings.Contains(f, "<html") || strings.Contains(f, "<script") {
+		t.Errorf("fragment: someone else's order or a full page:\n%s", f)
+	}
+	for _, href := range regexp.MustCompile(`href="([^"]*)"`).FindAllStringSubmatch(f, -1) {
+		if !strings.HasPrefix(href[1], "/orders/") {
+			t.Errorf("fragment URL without the prefix: %s", href[1])
+		}
+	}
+}

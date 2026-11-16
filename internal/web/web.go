@@ -4,6 +4,8 @@
 //
 //	ui/                 My orders: phase, cluster, PR, live status; SSE updates
 //	ui/orders/{id}      Order detail: timeline, files, PR/commit, order ID, Cancel
+//	ui/manifest.json    sthings-portal manifest (no login)
+//	ui/fragment/orders  portal overview fragment: my orders by state, newest
 //
 // Built like clusterbook (internal/portal.go): every URL is relative to
 // <base href>, so the pages work under BASE_PATH behind sthings-portal;
@@ -47,6 +49,8 @@ func (u *UI) Register(mux *http.ServeMux, prefix string) {
 	mux.HandleFunc("GET "+prefix+"/ui/orders/{id}", u.detail)
 	mux.HandleFunc("GET "+prefix+"/ui/orders/{id}/body", u.detailBody)
 	mux.HandleFunc("POST "+prefix+"/ui/orders/{id}/cancel", u.cancel)
+	mux.HandleFunc("GET "+prefix+"/ui/manifest.json", u.manifest)
+	mux.HandleFunc("GET "+prefix+"/ui/fragment/orders", u.ordersFragment)
 	mux.Handle("GET "+prefix+"/ui/static/", http.StripPrefix(prefix+"/ui/", http.FileServerFS(staticFS)))
 	if prefix != "" {
 		mux.Handle("GET "+prefix+"/ui", http.RedirectHandler(prefix+"/ui/", http.StatusMovedPermanently))
