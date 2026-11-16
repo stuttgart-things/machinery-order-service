@@ -190,6 +190,9 @@ type Template struct {
 	Type string
 	// Defaults are the parameters' defaults.
 	Defaults map[string]any
+	// Identity are the parameters claim-machinery-api binds to the login
+	// when order auth is on (parameter → user or owner).
+	Identity map[string]string
 }
 
 // Template reads a ClaimTemplate (GET /api/v1/claim-templates/{name}).
@@ -228,18 +231,22 @@ func (c *Client) Template(ctx context.Context, name, callerToken string) (*Templ
 		Spec struct {
 			Type       string `json:"type"`
 			Parameters []struct {
-				Name    string `json:"name"`
-				Default any    `json:"default"`
+				Name     string `json:"name"`
+				Default  any    `json:"default"`
+				Identity string `json:"identity"`
 			} `json:"parameters"`
 		} `json:"spec"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&t); err != nil {
 		return nil, fmt.Errorf("claim-machinery-api: decoding template %s: %w", name, err)
 	}
-	out := &Template{Name: t.Metadata.Name, Type: t.Spec.Type, Defaults: map[string]any{}}
+	out := &Template{Name: t.Metadata.Name, Type: t.Spec.Type, Defaults: map[string]any{}, Identity: map[string]string{}}
 	for _, p := range t.Spec.Parameters {
 		if p.Default != nil {
 			out.Defaults[p.Name] = p.Default
+		}
+		if p.Identity != "" {
+			out.Identity[p.Name] = p.Identity
 		}
 	}
 	return out, nil

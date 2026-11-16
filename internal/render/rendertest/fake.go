@@ -19,19 +19,26 @@ type Fake struct {
 	Tokens []string
 	// Err, when set, is returned by Render.
 	Err error
+	// Identity is the template's identity-bound parameters.
+	Identity map[string]string
+	// Params are the parameters seen by Render, in order.
+	Params []map[string]any
 }
 
 // Template returns the VM template's type and defaults.
 func (f *Fake) Template(_ context.Context, name, _ string) (*render.Template, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return &render.Template{Name: name, Type: "xr-native-vm", Defaults: map[string]any{
 		"templateName": "labda-vsphere", "use_case": "baseos", "size": "medium",
-	}}, nil
+	}, Identity: f.Identity}, nil
 }
 
 // Render renders a VM order from params.
 func (f *Fake) Render(_ context.Context, _ string, params map[string]any, token string) (string, error) {
 	f.mu.Lock()
 	f.Tokens = append(f.Tokens, token)
+	f.Params = append(f.Params, params)
 	err := f.Err
 	f.mu.Unlock()
 	if err != nil {
@@ -46,6 +53,11 @@ func (f *Fake) Render(_ context.Context, _ string, params map[string]any, token 
 	name := s("name", "demo")
 	src := s("source_path", "clusters/labda/vsphere/machinery-orders-xrs/"+name+".yaml")
 	id := s("order_id", "")
+	// Like xr-native-vm: requested-by and owner only with requested_by.
+	who := ""
+	if rb := s("requested_by", ""); rb != "" {
+		who = fmt.Sprintf("    stuttgart-things.com/requested-by: %s\n    stuttgart-things.com/owner: %s\n", rb, s("owner", rb))
+	}
 	out := fmt.Sprintf(`---
 apiVersion: resources.stuttgart-things.com/v1alpha1
 kind: NativeVsphereVM
@@ -58,11 +70,11 @@ metadata:
     stuttgart-things.com/management-cluster: %[3]s
     stuttgart-things.com/source-path: %[4]s
     stuttgart-things.com/order-id: %[2]s
-spec:
+%[6]sspec:
   environmentConfig: %[5]s
   vm:
     name: %[1]s
-`, name, id, s("management_cluster", "machinery"), src, s("environment_config", "labda"))
+`, name, id, s("management_cluster", "machinery"), src, s("environment_config", "labda"), who)
 	if s("use_case", "baseos") == "dev" {
 		out += fmt.Sprintf(`---
 apiVersion: monitoring.coreos.com/v1alpha1
