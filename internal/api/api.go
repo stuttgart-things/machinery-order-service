@@ -5,10 +5,13 @@
 //	GET  /api/v1/orders/watch           Server-Sent Events of order changes
 //	GET  /api/v1/orders/{id}            one order
 //	POST /api/v1/orders/{id}/cancel     cancel before the merge
+//	GET  /api/v1/management-clusters    where orders can go
 //	GET  /health, /ready, /version
 //
-// With AUTH_OIDC_ISSUER set, every /api/v1/orders endpoint needs a ZITADEL
-// JWT (internal/auth). The API answers at the root and under BASE_PATH.
+// With AUTH_OIDC_ISSUER set, every /api/v1 endpoint needs a ZITADEL JWT
+// (internal/auth). A caller sees the orders it placed and those owned by one
+// of its groups; admins see all (docs/adr/0001-order-visibility.md). The API
+// answers at the root and under BASE_PATH.
 package api
 
 import (
@@ -89,6 +92,7 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET "+p+"/api/v1/orders/watch", s.watch)
 		mux.HandleFunc("GET "+p+"/api/v1/orders/{id}", s.get)
 		mux.HandleFunc("POST "+p+"/api/v1/orders/{id}/cancel", s.cancel)
+		mux.HandleFunc("GET "+p+"/api/v1/management-clusters", s.clusters)
 		mux.HandleFunc("GET "+p+"/health", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, map[string]string{"status": "ok"}) })
 		mux.HandleFunc("GET "+p+"/ready", s.ready)
 		mux.HandleFunc("GET "+p+"/version", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, version.Info()) })
@@ -187,9 +191,10 @@ func (s *Server) Authorize(w http.ResponseWriter, r *http.Request, ui bool) (*Ca
 	return c, true
 }
 
-// MayCancel reports whether the caller may cancel o: anyone without auth;
-// with auth the orderer, a member of the order's owner group, or an admin.
-func (s *Server) MayCancel(c *Caller, o *v1alpha1.Order) bool {
+// MaySee reports whether the caller may see o: anyone without auth; with
+// auth the orderer, the order's owner (the caller or one of its groups), or
+// an admin (docs/adr/0001-order-visibility.md).
+func (s *Server) MaySee(c *Caller, o *v1alpha1.Order) bool {
 	if s.Auth == nil || c.ID == nil {
 		return true
 	}
@@ -197,15 +202,32 @@ func (s *Server) MayCancel(c *Caller, o *v1alpha1.Order) bool {
 	if c.Ref == o.Spec.RequestedBy || cfg.IsAdmin(*c.ID) {
 		return true
 	}
+	owner := Owner(o)
+	return owner != "" && (owner == c.Ref || slices.Contains(cfg.Groups(*c.ID), owner))
+}
+
+// MayCancel reports whether the caller may cancel o: whoever may see it.
+func (s *Server) MayCancel(c *Caller, o *v1alpha1.Order) bool { return s.MaySee(c, o) }
+
+// Owner is the order's owner parameter (user:… or group:…), "" if none.
+func Owner(o *v1alpha1.Order) string {
 	if rd := o.EffectiveRendered(); rd != nil && rd.Parameters != nil {
 		var p map[string]any
 		if json.Unmarshal(rd.Parameters.Raw, &p) == nil {
-			if owner, _ := p["owner"].(string); owner != "" {
-				return owner == c.Ref || slices.Contains(cfg.Groups(*c.ID), owner)
-			}
+			owner, _ := p["owner"].(string)
+			return owner
 		}
 	}
-	return false
+	return ""
+}
+
+// visibleTo is the visibility part of a filter: nil when the caller sees
+// everything (auth off, admin).
+func (s *Server) visibleTo(c *Caller) func(*v1alpha1.Order) bool {
+	if s.Auth == nil || c.ID == nil || s.Auth.Config().IsAdmin(*c.ID) {
+		return nil
+	}
+	return func(o *v1alpha1.Order) bool { return s.MaySee(c, o) }
 }
 
 // Create validates, renders with the caller's token and creates the Order.
@@ -220,7 +242,11 @@ func (s *Server) Create(ctx context.Context, c *Caller, req CreateRequest) (int,
 	mc := &v1alpha1.ManagementCluster{}
 	if err := s.Client.Get(ctx, types.NamespacedName{Name: req.ManagementCluster}, mc); err != nil {
 		if apierrors.IsNotFound(err) {
-			return http.StatusBadRequest, ErrorResponse{Error: fmt.Sprintf("unknown management cluster %q", req.ManagementCluster)}
+			msg := fmt.Sprintf("unknown management cluster %q", req.ManagementCluster)
+			if names, lerr := s.clusterNames(ctx); lerr == nil && len(names) > 0 {
+				msg += "; valid: " + strings.Join(names, ", ") + " (GET /api/v1/management-clusters)"
+			}
+			return http.StatusBadRequest, ErrorResponse{Error: msg}
 		}
 		return http.StatusInternalServerError, ErrorResponse{Error: err.Error()}
 	}
@@ -274,7 +300,31 @@ func (s *Server) Create(ctx context.Context, c *Caller, req CreateRequest) (int,
 		return http.StatusInternalServerError, ErrorResponse{Error: err.Error()}
 	}
 	slog.Info("order accepted", "order", id, "template", req.Template, "cluster", mc.Name, "requestedBy", requestedBy)
+	s.markAccepted(ctx, o)
 	return http.StatusCreated, typed(o)
+}
+
+// AcceptedMessage is the status message of a fresh order.
+const AcceptedMessage = "accepted: rendered; the pull request follows (GET /api/v1/orders/{id} or /api/v1/orders/watch)"
+
+// markAccepted sets the first phase right away, so the answer to the create
+// (and a GET right after it) says the order was taken and what comes next
+// (#14). The controller does the same when it gets there first; a conflict
+// means it did, and the order is read again.
+func (s *Server) markAccepted(ctx context.Context, o *v1alpha1.Order) {
+	o.Status.OrderID = o.Name
+	o.Status.Phase = v1alpha1.PhaseOrdered
+	o.Status.Message = AcceptedMessage
+	o.Status.History = []v1alpha1.PhaseTransition{{Phase: v1alpha1.PhaseOrdered, Time: metav1.Now(), Message: AcceptedMessage}}
+	err := s.Client.Status().Update(ctx, o)
+	if err == nil {
+		return
+	}
+	if fresh, gerr := s.Get(ctx, o.Name); gerr == nil && fresh.Status.Phase != "" {
+		*o = *fresh
+		return
+	}
+	slog.Info("order status not set at intake, the controller will", "order", o.Name, "error", err)
 }
 
 func (s *Server) create(w http.ResponseWriter, r *http.Request) {
@@ -290,6 +340,9 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	status, body := s.Create(r.Context(), c, req)
+	if o, ok := body.(*v1alpha1.Order); ok && status == http.StatusCreated {
+		w.Header().Set("Location", strings.TrimRight(s.BasePath, "/")+"/api/v1/orders/"+o.Name)
+	}
 	writeJSON(w, status, body)
 }
 
@@ -315,18 +368,21 @@ type Filter struct {
 	RequestedBy string
 	Phase       string
 	Cluster     string
+	// Visible, when set, hides the orders the caller may not see.
+	Visible func(*v1alpha1.Order) bool
 }
 
 // Match reports whether o passes the filter.
 func (f Filter) Match(o *v1alpha1.Order) bool {
-	return (f.RequestedBy == "" || o.Spec.RequestedBy == f.RequestedBy) &&
+	return (f.Visible == nil || f.Visible(o)) &&
+		(f.RequestedBy == "" || o.Spec.RequestedBy == f.RequestedBy) &&
 		(f.Phase == "" || string(o.Status.Phase) == f.Phase) &&
 		(f.Cluster == "" || o.Spec.Placement.ManagementCluster == f.Cluster)
 }
 
 func (s *Server) filter(w http.ResponseWriter, r *http.Request, c *Caller) (Filter, bool) {
 	q := r.URL.Query()
-	f := Filter{Phase: q.Get("phase"), Cluster: q.Get("cluster")}
+	f := Filter{Phase: q.Get("phase"), Cluster: q.Get("cluster"), Visible: s.visibleTo(c)}
 	if q.Get("mine") == "true" {
 		if c.Ref == "" {
 			writeError(w, http.StatusBadRequest, "mine=true needs a login (auth is off)")
@@ -385,11 +441,12 @@ func (s *Server) Get(ctx context.Context, id string) (*v1alpha1.Order, error) {
 }
 
 func (s *Server) get(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.Authorize(w, r, false); !ok {
+	c, ok := s.Authorize(w, r, false)
+	if !ok {
 		return
 	}
 	o, err := s.Get(r.Context(), r.PathValue("id"))
-	if apierrors.IsNotFound(err) {
+	if apierrors.IsNotFound(err) || (err == nil && !s.MaySee(c, o)) {
 		writeError(w, http.StatusNotFound, "order not found")
 		return
 	}
@@ -410,8 +467,9 @@ func (s *Server) Cancel(ctx context.Context, c *Caller, id, resourceVersion stri
 	if err != nil {
 		return http.StatusInternalServerError, ErrorResponse{Error: err.Error()}
 	}
-	if !s.MayCancel(c, o) {
-		return http.StatusForbidden, ErrorResponse{Error: "forbidden: only the orderer, its owner group or an admin may cancel"}
+	if !s.MaySee(c, o) {
+		// not visible = not there for this caller (no hint that it exists)
+		return http.StatusNotFound, ErrorResponse{Error: "order not found"}
 	}
 	if resourceVersion != "" && resourceVersion != o.ResourceVersion {
 		return http.StatusConflict, ErrorResponse{Error: "the order changed since it was read; reload and try again"}
@@ -524,4 +582,59 @@ func (s *Server) watch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Stream(w, r, f, "order", nil)
+}
+
+// ClusterInfo is one entry of GET /api/v1/management-clusters: what an
+// orderer needs to pick a cluster, nothing about how the service reaches it.
+type ClusterInfo struct {
+	Name     string `json:"name"`
+	Lab      string `json:"lab,omitempty"`
+	Cordoned bool   `json:"cordoned"`
+	// Repository and OrdersPath are where the cluster's orders land in git.
+	Repository string `json:"repository,omitempty"`
+	OrdersPath string `json:"ordersPath,omitempty"`
+}
+
+// Clusters lists the management clusters, by name.
+func (s *Server) Clusters(ctx context.Context) ([]ClusterInfo, error) {
+	var list v1alpha1.ManagementClusterList
+	if err := s.Client.List(ctx, &list); err != nil {
+		return nil, err
+	}
+	out := make([]ClusterInfo, 0, len(list.Items))
+	for _, mc := range list.Items {
+		out = append(out, ClusterInfo{
+			Name: mc.Name, Lab: mc.Spec.Lab, Cordoned: mc.Spec.Cordoned,
+			Repository: mc.Spec.GitOps.Repository, OrdersPath: mc.Spec.GitOps.OrdersPath,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// clusterNames are the names of the clusters that take orders.
+func (s *Server) clusterNames(ctx context.Context) ([]string, error) {
+	cs, err := s.Clusters(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, c := range cs {
+		if !c.Cordoned {
+			names = append(names, c.Name)
+		}
+	}
+	return names, nil
+}
+
+func (s *Server) clusters(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.Authorize(w, r, false); !ok {
+		return
+	}
+	cs, err := s.Clusters(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": cs})
 }

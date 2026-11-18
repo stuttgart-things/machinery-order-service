@@ -176,13 +176,24 @@ func TestAuthListCancel(t *testing.T) {
 	if len(items) != 1 || items[0].(map[string]any)["spec"].(map[string]any)["rendered"] != nil {
 		t.Errorf("mine: %v", items)
 	}
+	// Visibility (ADR 0001): alice and bob see their own, the admin both.
 	_, out = s.do(t, "GET", "/api/v1/orders", alice, nil)
+	if len(out["items"].([]any)) != 1 {
+		t.Errorf("alice sees: %v", out)
+	}
+	_, out = s.do(t, "GET", "/api/v1/orders", admin, nil)
 	if len(out["items"].([]any)) != 2 {
-		t.Errorf("all: %v", out)
+		t.Errorf("admin sees: %v", out)
+	}
+	if rec, _ := s.do(t, "GET", "/api/v1/orders/"+id, bob, nil); rec.Code != 404 {
+		t.Errorf("bob gets alice's order: %d", rec.Code)
+	}
+	if rec, _ := s.do(t, "GET", "/api/v1/orders/"+id, admin, nil); rec.Code != 200 {
+		t.Errorf("admin gets alice's order: %d", rec.Code)
 	}
 
-	// Cancel: not bob's; a moved resourceVersion; merged; then alice.
-	if rec, _ := s.do(t, "POST", "/api/v1/orders/"+id+"/cancel", bob, nil); rec.Code != 403 {
+	// Cancel: not bob's (not even visible); a moved resourceVersion; merged; then alice.
+	if rec, _ := s.do(t, "POST", "/api/v1/orders/"+id+"/cancel", bob, nil); rec.Code != 404 {
 		t.Errorf("bob: %d", rec.Code)
 	}
 	if rec, _ := s.do(t, "POST", "/api/v1/orders/"+id+"/cancel", alice, map[string]any{"resourceVersion": "999"}); rec.Code != 409 {
@@ -249,5 +260,76 @@ func TestWatch(t *testing.T) {
 	}
 	if event != "order" || e.Type != "MODIFIED" || e.Order.Name != "ord-x" || e.Order.Status.Phase != v1alpha1.PhaseReady {
 		t.Errorf("event %q %+v", event, e)
+	}
+}
+
+func TestTeamVisibility(t *testing.T) {
+	s := newSetup(t, true)
+	alice := s.token(t, "alice", "backstage-team-ai-personas")
+	carol := s.token(t, "carol", "backstage-team-ai-personas")
+	dave := s.token(t, "dave", "backstage-team-other")
+
+	rec, out := s.do(t, "POST", "/api/v1/orders", alice, map[string]any{
+		"template": "native-vm-labda-vsphere", "managementCluster": "machinery",
+		"parameters": map[string]any{"name": "team", "owner": "group:default/ai-personas"},
+	})
+	if rec.Code != 201 {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	id := out["metadata"].(map[string]any)["name"].(string)
+	for name, tc := range map[string]struct {
+		token string
+		n     int
+		get   int
+	}{"team member": {carol, 1, 200}, "other team": {dave, 0, 404}} {
+		t.Run(name, func(t *testing.T) {
+			_, out := s.do(t, "GET", "/api/v1/orders", tc.token, nil)
+			if got := len(out["items"].([]any)); got != tc.n {
+				t.Errorf("list: %d", got)
+			}
+			if rec, _ := s.do(t, "GET", "/api/v1/orders/"+id, tc.token, nil); rec.Code != tc.get {
+				t.Errorf("get: %d", rec.Code)
+			}
+		})
+	}
+}
+
+func TestAcceptedAndClusters(t *testing.T) {
+	s := newSetup(t, false)
+	rec, out := s.do(t, "POST", "/orders/api/v1/orders", "", map[string]any{
+		"template": "native-vm-labda-vsphere", "managementCluster": "machinery", "parameters": map[string]any{"name": "demo"},
+	})
+	if rec.Code != 201 {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	id := out["metadata"].(map[string]any)["name"].(string)
+	st, _ := out["status"].(map[string]any)
+	if st["phase"] != "Ordered" || st["orderID"] != id || st["message"] != api.AcceptedMessage {
+		t.Errorf("status right after create: %v", st)
+	}
+	if loc := rec.Header().Get("Location"); loc != "/orders/api/v1/orders/"+id {
+		t.Errorf("Location %q", loc)
+	}
+	_, out = s.do(t, "GET", "/api/v1/orders/"+id, "", nil)
+	if out["status"].(map[string]any)["phase"] != "Ordered" {
+		t.Errorf("get right after create: %v", out["status"])
+	}
+
+	rec, out = s.do(t, "GET", "/orders/api/v1/management-clusters", "", nil)
+	if rec.Code != 200 {
+		t.Fatalf("clusters: %d", rec.Code)
+	}
+	items := out["items"].([]any)
+	if len(items) != 2 || items[0].(map[string]any)["name"] != "closed" || items[0].(map[string]any)["cordoned"] != true ||
+		items[1].(map[string]any)["ordersPath"] != "clusters/labda/vsphere/machinery-orders-xrs" {
+		t.Errorf("clusters: %v", items)
+	}
+	if _, ok := items[1].(map[string]any)["machinery"]; ok {
+		t.Error("clusters leak the machinery endpoint")
+	}
+
+	_, out = s.do(t, "POST", "/api/v1/orders", "", map[string]any{"template": "t", "managementCluster": "nope", "parameters": map[string]any{"name": "x"}})
+	if msg, _ := out["error"].(string); !strings.Contains(msg, "valid: machinery") || strings.Contains(msg, "closed") {
+		t.Errorf("unknown cluster message: %q", msg)
 	}
 }
