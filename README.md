@@ -46,16 +46,22 @@ merge its pull request is closed, after the merge only the record goes.
 
 | Method | Path | |
 |---|---|---|
-| `POST` | `/api/v1/orders` | `{"template", "managementCluster", "parameters", "reason"}` → 201 Order. 400 with `fields` when claim-machinery-api rejects parameters |
-| `GET` | `/api/v1/orders` | `?mine=true`, `?phase=`, `?cluster=`; without the rendered files |
-| `GET` | `/api/v1/orders/watch` | Server-Sent Events, `event: order`, same filters |
-| `GET` | `/api/v1/orders/{id}` | one order with its files |
-| `POST` | `/api/v1/orders/{id}/cancel` | `{"resourceVersion"}` optional: 409 when the order moved. Only before the merge |
+| `POST` | `/api/v1/orders` | `{"template", "managementCluster", "parameters", "reason"}` → 201 Order, already `Ordered` with a message on what follows, `Location` header. 400 with `fields` when claim-machinery-api rejects parameters, 400 with the valid names for an unknown cluster |
+| `GET` | `/api/v1/orders` | `?mine=true`, `?phase=`, `?cluster=`; without the rendered files. Only the orders the caller may see (below) |
+| `GET` | `/api/v1/orders/watch` | Server-Sent Events, `event: order`, same filters and visibility |
+| `GET` | `/api/v1/orders/{id}` | one order with its files; 404 when the caller may not see it |
+| `POST` | `/api/v1/orders/{id}/cancel` | `{"resourceVersion"}` optional: 409 when the order moved. Only before the merge, by whoever may see it |
+| `GET` | `/api/v1/management-clusters` | `{"items": [{"name", "lab", "cordoned", "repository", "ordersPath"}]}`: where orders can go |
 | `GET` | `/ui/` | **My orders**, live through SSE |
 | `GET` | `/ui/orders/{id}` | **Order detail**: timeline, files, PR/commit, order ID, Cancel |
 | `GET` | `/ui/manifest.json` | sthings-portal manifest (no login): title `Orders`, one fragment |
 | `GET` | `/ui/fragment/orders` | Portal overview fragment: the caller's orders open/ready/failed and the newest five, linked to their detail |
 | `GET` | `/health`, `/ready`, `/version` | |
+
+**Visibility** ([ADR 0001](docs/adr/0001-order-visibility.md)): with auth on, a
+caller sees the orders it placed and those whose `owner` parameter is itself or
+one of its groups (from the ZITADEL project roles, as for Backstage); admins
+(`AUTH_ADMIN_ROLES`) see all. Without auth everything is visible.
 
 Everything answers at the root and under `BASE_PATH` (behind sthings-portal).
 The UI has no ordering form on purpose: orders come in through the API.

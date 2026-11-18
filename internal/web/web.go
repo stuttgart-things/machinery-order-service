@@ -172,7 +172,7 @@ func (u *UI) load(w http.ResponseWriter, r *http.Request) (*api.Caller, *detailD
 		return nil, nil, false
 	}
 	o, err := u.API.Get(r.Context(), r.PathValue("id"))
-	if apierrors.IsNotFound(err) {
+	if apierrors.IsNotFound(err) || (err == nil && !u.API.MaySee(c, o)) {
 		http.Error(w, "order not found", http.StatusNotFound)
 		return nil, nil, false
 	}
