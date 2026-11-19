@@ -1,3 +1,10 @@
+# [0.4.0](https://github.com/stuttgart-things/machinery-order-service/compare/v0.3.0...v0.4.0) (2026-11-19)
+
+
+### Features
+
+* auto-merge when the order asks for it and a rule allows it ([40976db](https://github.com/stuttgart-things/machinery-order-service/commit/40976db3854e1751aaeac6824ea983c1630dc549))
+
 # [0.3.0](https://github.com/stuttgart-things/machinery-order-service/compare/v0.2.0...v0.3.0) (2026-11-19)
 
 
