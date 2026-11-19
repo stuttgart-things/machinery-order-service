@@ -344,11 +344,14 @@ func (r *OrderReconciler) followPR(ctx context.Context, o *v1alpha1.Order) (ctrl
 func (r *OrderReconciler) autoMerge(ctx context.Context, o *v1alpha1.Order, pr *delivery.PRState) (ctrl.Result, error) {
 	d := o.Status.Delivery
 	wait := ctrl.Result{RequeueAfter: r.PRPoll}
+	// set records the state in the condition and, for API clients that only
+	// read the message (claims orders get/watch), in status.message.
 	set := func(status metav1.ConditionStatus, reason, msg string) {
 		meta.SetStatusCondition(&o.Status.Conditions, metav1.Condition{
 			Type: ConditionAutoMerge, Status: status, Reason: reason, Message: msg, ObservedGeneration: o.Generation,
 		})
 	}
+	note := func(msg string) { o.Status.Message = "pull request " + d.PullRequest.URL + "; auto-merge: " + msg }
 	mc, err := r.cluster(ctx, o.Spec.Placement.ManagementCluster)
 	if err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
@@ -356,26 +359,32 @@ func (r *OrderReconciler) autoMerge(ctx context.Context, o *v1alpha1.Order, pr *
 	rule := automerge.Rule(mc.Spec.AutoMerge, o.Spec.AutoMerge.Rule)
 	if rule == nil {
 		set(metav1.ConditionFalse, "RuleGone", fmt.Sprintf("rule %s is no longer on ManagementCluster %s; a human merges", o.Spec.AutoMerge.Rule, mc.Name))
+		note(fmt.Sprintf("stopped, rule %s is gone; a human merges", o.Spec.AutoMerge.Rule))
 		return wait, nil
 	}
 	if ok, why := automerge.Covers(*rule, o.Spec.Template, automerge.Params(o.EffectiveRendered())); !ok {
 		set(metav1.ConditionFalse, "RuleGone", fmt.Sprintf("rule %s no longer covers the order (%s); a human merges", rule.Name, why))
+		note(fmt.Sprintf("stopped, rule %s no longer covers the order (%s); a human merges", rule.Name, why))
 		return wait, nil
 	}
 	checks, err := r.Git.Checks(ctx, d.Repository, pr.HeadSHA)
 	if err != nil {
 		set(metav1.ConditionUnknown, "Waiting", err.Error())
+		note("cannot read checks: " + checksError(err))
 		return wait, nil
 	}
 	switch {
 	case len(checks.Failed) > 0:
 		set(metav1.ConditionFalse, "ChecksFailed", "not merging, failed: "+strings.Join(checks.Failed, ", ")+"; a human decides")
+		note("stopped, failed: " + strings.Join(checks.Failed, ", ") + "; a human decides")
 		return wait, nil
 	case len(checks.Pending) > 0:
 		set(metav1.ConditionUnknown, "Waiting", "waiting for checks: "+strings.Join(checks.Pending, ", "))
+		note("waiting for checks: " + strings.Join(checks.Pending, ", "))
 		return wait, nil
 	case checks.Total == 0 && time.Since(r.prOpenedAt(o)) < r.settle():
 		set(metav1.ConditionUnknown, "Waiting", "waiting for checks to show up")
+		note("waiting for checks to show up")
 		return wait, nil
 	}
 	method := automerge.Method(mc.Spec.AutoMerge)
@@ -383,6 +392,7 @@ func (r *OrderReconciler) autoMerge(ctx context.Context, o *v1alpha1.Order, pr *
 		var nm *delivery.NotMergeableError
 		if errors.As(err, &nm) {
 			set(metav1.ConditionFalse, "NotMergeable", nm.Msg+"; a human decides")
+			note("stopped, GitHub refuses the merge; a human decides")
 			return wait, nil
 		}
 		return ctrl.Result{}, err
@@ -397,6 +407,15 @@ func (r *OrderReconciler) autoMerge(ctx context.Context, o *v1alpha1.Order, pr *
 	log.FromContext(ctx).Info("auto-merged", "order", o.Name, "pr", d.PullRequest.URL, "rule", rule.Name)
 	// The next read of the PR sees it merged and moves the order on.
 	return ctrl.Result{RequeueAfter: time.Second}, nil
+}
+
+// checksError shortens GitHub's answer when the checks cannot be read; a 403
+// means the GitHub App lacks the permissions.
+func checksError(err error) string {
+	if strings.Contains(err.Error(), "403") {
+		return "403 Resource not accessible by integration (the GitHub App needs checks: read and statuses: read)"
+	}
+	return err.Error()
 }
 
 func (r *OrderReconciler) settle() time.Duration {
