@@ -146,7 +146,9 @@ No matching rule: the order is refused with 403. A matching order merges once
 the checks on the PR's head commit passed (`success`, `neutral`, `skipped`;
 no checks at all after a minute counts as passed). A failed check, a rule
 that was removed or narrowed, or a PR GitHub will not merge leaves it to a
-human; condition `AutoMerge` says why. Decision and limits:
+human; condition `AutoMerge` says why. While the PR is open, `status.message`
+shows the same state (`pull request <url>; auto-merge: waiting for checks: …`),
+so clients that only read the message (claims) see it too. Decision and limits:
 [ADR 0002](docs/adr/0002-auto-merge.md).
 
 ## Deployment

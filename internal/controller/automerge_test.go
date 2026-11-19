@@ -2,6 +2,7 @@ package controller_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -39,6 +40,13 @@ func autoMergeCond(reason, contains string) func(*v1alpha1.Order) bool {
 	}
 }
 
+func TestChecksError(t *testing.T) {
+	err := errors.New("reading check runs of 9d0a946: GET https://api.github.com/...: 403 Resource not accessible by integration []")
+	if got := controller.ChecksError(err); !strings.Contains(got, "needs checks: read and statuses: read") || strings.Contains(got, "api.github.com") {
+		t.Errorf("%q", got)
+	}
+}
+
 func TestAutoMerge(t *testing.T) {
 	e := start(t)
 	e.cluster(t, false)
@@ -63,16 +71,22 @@ func TestAutoMerge(t *testing.T) {
 		t.Errorf("PR body:\n%s", pr.Body)
 	}
 	e.git.SetChecks(pr.HeadSHA, githubfake.Check{Name: "validate", Status: "in_progress"})
-	e.wait(t, "ord-0000000000a1", "waiting for checks", autoMergeCond("Waiting", "validate"))
+	o := e.wait(t, "ord-0000000000a1", "waiting for checks", autoMergeCond("Waiting", "validate"))
+	if want := "pull request " + o.Status.Delivery.PullRequest.URL + "; auto-merge: waiting for checks: validate"; o.Status.Message != want {
+		t.Errorf("message %q, want %q", o.Status.Message, want)
+	}
 	e.git.SetChecks(pr.HeadSHA, githubfake.Check{Name: "validate", Status: "completed", Conclusion: "failure"})
-	e.wait(t, "ord-0000000000a1", "checks failed", autoMergeCond("ChecksFailed", "validate (failure)"))
+	o = e.wait(t, "ord-0000000000a1", "checks failed", autoMergeCond("ChecksFailed", "validate (failure)"))
+	if !strings.HasSuffix(o.Status.Message, "; auto-merge: stopped, failed: validate (failure); a human decides") {
+		t.Errorf("message %q", o.Status.Message)
+	}
 	if p := e.git.Pulls()[0]; p.Merged {
 		t.Fatal("merged with a failed check")
 	}
 	e.git.SetChecks(pr.HeadSHA,
 		githubfake.Check{Name: "validate", Status: "completed", Conclusion: "success"},
 		githubfake.Check{Name: "deploy", Status: "completed", Conclusion: "skipped"})
-	o := e.wait(t, "ord-0000000000a1", "Merged", phase(v1alpha1.PhaseMerged))
+	o = e.wait(t, "ord-0000000000a1", "Merged", phase(v1alpha1.PhaseMerged))
 	if c := meta.FindStatusCondition(o.Status.Conditions, controller.ConditionAutoMerge); c == nil || c.Reason != "Merged" || !strings.Contains(c.Message, "2 checks passed") {
 		t.Errorf("condition %+v", c)
 	}
@@ -82,7 +96,10 @@ func TestAutoMerge(t *testing.T) {
 
 	// A rule that is gone leaves the PR to a human.
 	autoMergeOrder(t, e, "ord-0000000000a2", "am-gone", "removed")
-	e.wait(t, "ord-0000000000a2", "rule gone", autoMergeCond("RuleGone", "removed"))
+	o = e.wait(t, "ord-0000000000a2", "rule gone", autoMergeCond("RuleGone", "removed"))
+	if !strings.Contains(o.Status.Message, "auto-merge: stopped, rule removed is gone") {
+		t.Errorf("message %q", o.Status.Message)
+	}
 
 	// No checks at all: merged once the settle time is over.
 	autoMergeOrder(t, e, "ord-0000000000a3", "am-none", "personas")
