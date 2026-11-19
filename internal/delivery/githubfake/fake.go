@@ -42,17 +42,26 @@ type Server struct {
 	*httptest.Server
 	Owner, Repo string
 
-	mu      sync.Mutex
-	trees   map[string]map[string]string // tree sha -> path -> content
-	commits map[string]*commit
-	refs    map[string]string // heads/main -> sha
-	pulls   []*PR
-	n       int
+	mu           sync.Mutex
+	trees        map[string]map[string]string // tree sha -> path -> content
+	commits      map[string]*commit
+	refs         map[string]string // heads/main -> sha
+	pulls        []*PR
+	n            int
+	checks       map[string][]Check // sha -> check runs
+	mergeMethods []string           // of every merge through the API
+}
+
+// Check is one check run of the fake.
+type Check struct {
+	Name       string
+	Status     string // queued, in_progress, completed
+	Conclusion string // success, failure, skipped, ...
 }
 
 // New starts a fake whose main branch holds files.
 func New(owner, repo string, files map[string]string) *Server {
-	s := &Server{Owner: owner, Repo: repo, trees: map[string]map[string]string{}, commits: map[string]*commit{}, refs: map[string]string{}}
+	s := &Server{Owner: owner, Repo: repo, trees: map[string]map[string]string{}, commits: map[string]*commit{}, refs: map[string]string{}, checks: map[string][]Check{}}
 	tree := s.putTree(files)
 	c := s.putCommit(tree, nil, "initial")
 	s.refs["heads/main"] = c
@@ -135,11 +144,29 @@ func (s *Server) Pulls() []PR {
 	return out
 }
 
+// MergeMethods returns the methods of the merges done through the API.
+func (s *Server) MergeMethods() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.mergeMethods...)
+}
+
+// SetChecks sets the check runs of a commit (replacing earlier ones).
+func (s *Server) SetChecks(sha string, checks ...Check) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.checks[sha] = checks
+}
+
 // Merge merges pull request n into its base (a merge commit) and returns the
 // merge SHA.
 func (s *Server) Merge(n int) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.merge(n)
+}
+
+func (s *Server) merge(n int) string {
 	pr := s.pull(n)
 	base := s.refs["heads/"+pr.Base]
 	head := s.commits[pr.HeadSHA]
@@ -365,6 +392,40 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		pr := &PR{Number: len(s.pulls) + 1, Title: in.Title, Body: in.Body, Head: in.Head, Base: in.Base, HeadSHA: sha, State: "open"}
 		s.pulls = append(s.pulls, pr)
 		writeJSON(w, 201, s.prJSON(pr))
+
+	case r.Method == http.MethodGet && strings.HasPrefix(rest, "commits/") && strings.HasSuffix(rest, "/check-runs"):
+		sha := strings.TrimSuffix(strings.TrimPrefix(rest, "commits/"), "/check-runs")
+		runs := []map[string]any{}
+		for i, c := range s.checks[sha] {
+			runs = append(runs, map[string]any{"id": i + 1, "name": c.Name, "status": c.Status, "conclusion": c.Conclusion})
+		}
+		writeJSON(w, 200, map[string]any{"total_count": len(runs), "check_runs": runs})
+
+	case r.Method == http.MethodGet && strings.HasPrefix(rest, "commits/") && strings.HasSuffix(rest, "/status"):
+		writeJSON(w, 200, map[string]any{"state": "pending", "statuses": []any{}})
+
+	case r.Method == http.MethodPut && strings.HasPrefix(rest, "pulls/") && strings.HasSuffix(rest, "/merge"):
+		n, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(rest, "pulls/"), "/merge"))
+		pr := s.pull(n)
+		if err != nil || pr == nil {
+			notFound(w)
+			return
+		}
+		var in struct {
+			SHA         string `json:"sha"`
+			MergeMethod string `json:"merge_method"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		switch {
+		case pr.State != "open":
+			writeJSON(w, 405, map[string]any{"message": "Pull Request is not mergeable"})
+		case in.SHA != "" && in.SHA != pr.HeadSHA:
+			writeJSON(w, 409, map[string]any{"message": "Head branch was modified"})
+		default:
+			s.mergeMethods = append(s.mergeMethods, in.MergeMethod)
+			sha := s.merge(n)
+			writeJSON(w, 200, map[string]any{"sha": sha, "merged": true})
+		}
 
 	case strings.HasPrefix(rest, "pulls/"):
 		n, err := strconv.Atoi(strings.TrimPrefix(rest, "pulls/"))

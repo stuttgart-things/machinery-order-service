@@ -98,6 +98,7 @@ func start(t *testing.T) *env {
 		Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(),
 		Renderer: e.renderer, Git: gh, Machinery: e.machinery, Namespace: "default",
 		PRPoll: 100 * time.Millisecond, LivePoll: 100 * time.Millisecond, ReadyPoll: 100 * time.Millisecond,
+		AutoMergeSettle: 2 * time.Second,
 	}
 	if err := r.SetupWithManager(mgr); err != nil {
 		t.Fatal(err)

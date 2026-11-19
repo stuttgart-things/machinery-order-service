@@ -33,6 +33,7 @@ import (
 
 	"github.com/stuttgart-things/machinery-order-service/api/v1alpha1"
 	"github.com/stuttgart-things/machinery-order-service/internal/auth"
+	"github.com/stuttgart-things/machinery-order-service/internal/automerge"
 	"github.com/stuttgart-things/machinery-order-service/internal/intake"
 	"github.com/stuttgart-things/machinery-order-service/internal/render"
 	"github.com/stuttgart-things/machinery-order-service/internal/version"
@@ -62,6 +63,10 @@ type CreateRequest struct {
 	Reason            string         `json:"reason,omitempty"`
 	// RequestedBy is only taken when auth is off; with auth the login is.
 	RequestedBy string `json:"requestedBy,omitempty"`
+	// AutoMerge asks the service to merge the pull request once its checks
+	// pass. Refused (403) unless a rule of the management cluster allows it
+	// (docs/adr/0002-auto-merge.md).
+	AutoMerge bool `json:"autoMerge,omitempty"`
 }
 
 // CancelRequest is the body of POST /api/v1/orders/{id}/cancel.
@@ -296,10 +301,22 @@ func (s *Server) Create(ctx context.Context, c *Caller, req CreateRequest) (int,
 		return http.StatusBadGateway, ErrorResponse{Error: err.Error()}
 	}
 	o.Spec.Rendered = rd
+	if req.AutoMerge {
+		var groups []string
+		if c.ID != nil && s.Auth != nil {
+			groups = s.Auth.Config().Groups(*c.ID)
+		}
+		rule, why := automerge.Find(mc.Spec.AutoMerge, requestedBy, groups, req.Template, automerge.Params(rd))
+		if rule == nil {
+			return http.StatusForbidden, ErrorResponse{Error: fmt.Sprintf(
+				"auto-merge not allowed on %s: %s. Order without autoMerge and a human merges (rules: GET /api/v1/management-clusters)", mc.Name, why)}
+		}
+		o.Spec.AutoMerge = &v1alpha1.OrderAutoMerge{Rule: rule.Name}
+	}
 	if err := s.Client.Create(ctx, o); err != nil {
 		return http.StatusInternalServerError, ErrorResponse{Error: err.Error()}
 	}
-	slog.Info("order accepted", "order", id, "template", req.Template, "cluster", mc.Name, "requestedBy", requestedBy)
+	slog.Info("order accepted", "order", id, "template", req.Template, "cluster", mc.Name, "requestedBy", requestedBy, "autoMerge", req.AutoMerge)
 	s.markAccepted(ctx, o)
 	return http.StatusCreated, typed(o)
 }
@@ -593,6 +610,8 @@ type ClusterInfo struct {
 	// Repository and OrdersPath are where the cluster's orders land in git.
 	Repository string `json:"repository,omitempty"`
 	OrdersPath string `json:"ordersPath,omitempty"`
+	// AutoMerge lists who may order with autoMerge, and what.
+	AutoMerge *v1alpha1.AutoMerge `json:"autoMerge,omitempty"`
 }
 
 // Clusters lists the management clusters, by name.
@@ -606,6 +625,7 @@ func (s *Server) Clusters(ctx context.Context) ([]ClusterInfo, error) {
 		out = append(out, ClusterInfo{
 			Name: mc.Name, Lab: mc.Spec.Lab, Cordoned: mc.Spec.Cordoned,
 			Repository: mc.Spec.GitOps.Repository, OrdersPath: mc.Spec.GitOps.OrdersPath,
+			AutoMerge: mc.Spec.AutoMerge,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })

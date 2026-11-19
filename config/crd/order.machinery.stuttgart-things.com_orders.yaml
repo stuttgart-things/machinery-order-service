@@ -65,6 +65,20 @@ spec:
             description: OrderSpec is what was ordered. Only Cancel changes after
               the intake.
             properties:
+              autoMerge:
+                description: |-
+                  AutoMerge is set when the orderer asked the service to merge the pull
+                  request itself and a rule of the ManagementCluster allowed it at intake
+                  (docs/adr/0002-auto-merge.md). Unset: a human merges.
+                properties:
+                  rule:
+                    description: Rule is the name of the ManagementCluster's auto-merge
+                      rule.
+                    minLength: 1
+                    type: string
+                required:
+                - rule
+                type: object
               cancel:
                 description: |-
                   Cancel asks to withdraw the order. Before the merge the pull request is
@@ -162,6 +176,9 @@ spec:
             - message: rendered is immutable once set
               rule: '!has(oldSelf.rendered) || (has(self.rendered) && self.rendered
                 == oldSelf.rendered)'
+            - message: autoMerge is immutable
+              rule: has(self.autoMerge) == has(oldSelf.autoMerge) && (!has(self.autoMerge)
+                || self.autoMerge == oldSelf.autoMerge)
           status:
             description: OrderStatus is where the order stands.
             properties:

@@ -74,6 +74,7 @@ type Placement struct {
 //
 // +kubebuilder:validation:XValidation:rule="self.template == oldSelf.template && self.placement == oldSelf.placement",message="template and placement are immutable"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.rendered) || (has(self.rendered) && self.rendered == oldSelf.rendered)",message="rendered is immutable once set"
+// +kubebuilder:validation:XValidation:rule="has(self.autoMerge) == has(oldSelf.autoMerge) && (!has(self.autoMerge) || self.autoMerge == oldSelf.autoMerge)",message="autoMerge is immutable"
 type OrderSpec struct {
 	// Template is the claim-machinery-api ClaimTemplate to render.
 	// +kubebuilder:validation:MinLength=1
@@ -110,6 +111,18 @@ type OrderSpec struct {
 	// (that needs a teardown, which comes later).
 	// +optional
 	Cancel bool `json:"cancel,omitempty"`
+	// AutoMerge is set when the orderer asked the service to merge the pull
+	// request itself and a rule of the ManagementCluster allowed it at intake
+	// (docs/adr/0002-auto-merge.md). Unset: a human merges.
+	// +optional
+	AutoMerge *OrderAutoMerge `json:"autoMerge,omitempty"`
+}
+
+// OrderAutoMerge records which rule allowed the auto-merge.
+type OrderAutoMerge struct {
+	// Rule is the name of the ManagementCluster's auto-merge rule.
+	// +kubebuilder:validation:MinLength=1
+	Rule string `json:"rule"`
 }
 
 // RenderedFile is one file of the rendered order.

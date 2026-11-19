@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/stuttgart-things/machinery-order-service/api/v1alpha1"
+	"github.com/stuttgart-things/machinery-order-service/internal/automerge"
 	"github.com/stuttgart-things/machinery-order-service/internal/delivery"
 	"github.com/stuttgart-things/machinery-order-service/internal/intake"
 	"github.com/stuttgart-things/machinery-order-service/internal/machinery"
@@ -42,7 +43,14 @@ const (
 	ConditionDelivered = "Delivered"
 	// ConditionLive: machinery answered for the XR.
 	ConditionLive = "Live"
+	// ConditionAutoMerge: where the service's own merge of the PR stands
+	// (orders with spec.autoMerge only).
+	ConditionAutoMerge = "AutoMerge"
 )
+
+// AutoMergeSettle is how long an auto-merge order waits for checks to show
+// up on a PR before it treats "no checks" as passed.
+const AutoMergeSettle = time.Minute
 
 // OrderReconciler reconciles Orders.
 type OrderReconciler struct {
@@ -58,6 +66,8 @@ type OrderReconciler struct {
 	// LivePoll how often machinery is asked while the XR builds; ReadyPoll
 	// how often a Ready order is refreshed.
 	PRPoll, LivePoll, ReadyPoll time.Duration
+	// AutoMergeSettle overrides AutoMergeSettle (tests).
+	AutoMergeSettle time.Duration
 }
 
 // +kubebuilder:rbac:groups=order.machinery.stuttgart-things.com,resources=orders,verbs=get;list;watch;create;update;patch
@@ -264,9 +274,15 @@ func (r *OrderReconciler) deliver(ctx context.Context, o *v1alpha1.Order) (ctrl.
 	if base == "" {
 		base = "main"
 	}
+	body := conv.Body
+	if am := o.Spec.AutoMerge; am != nil {
+		body += fmt.Sprintf("\n\n**Auto-merge:** the service merges this pull request once its checks pass "+
+			"(rule `%s` of ManagementCluster %s, asked for by %s). Close it to stop the order.\n",
+			am.Rule, mc.Name, o.Spec.RequestedBy)
+	}
 	req := delivery.Request{
 		Repository: repo, BaseBranch: base, Branch: conv.Branch,
-		Title: conv.Title, Body: conv.Body, OrderID: o.Name,
+		Title: conv.Title, Body: body, OrderID: o.Name,
 	}
 	for _, f := range rd.Files {
 		req.Files = append(req.Files, delivery.File{Path: f.Path, Content: f.Content})
@@ -316,7 +332,88 @@ func (r *OrderReconciler) followPR(ctx context.Context, o *v1alpha1.Order) (ctrl
 		SetPhase(o, v1alpha1.PhaseCancelled, "pull request closed without a merge")
 		return ctrl.Result{}, nil
 	}
+	if o.Spec.AutoMerge != nil {
+		return r.autoMerge(ctx, o, pr)
+	}
 	return ctrl.Result{RequeueAfter: r.PRPoll}, nil
+}
+
+// autoMerge merges an open PR of an order that asked for it, once its
+// checks pass and the rule still covers it (docs/adr/0002-auto-merge.md).
+// Anything else leaves the PR to a human; the condition says why.
+func (r *OrderReconciler) autoMerge(ctx context.Context, o *v1alpha1.Order, pr *delivery.PRState) (ctrl.Result, error) {
+	d := o.Status.Delivery
+	wait := ctrl.Result{RequeueAfter: r.PRPoll}
+	set := func(status metav1.ConditionStatus, reason, msg string) {
+		meta.SetStatusCondition(&o.Status.Conditions, metav1.Condition{
+			Type: ConditionAutoMerge, Status: status, Reason: reason, Message: msg, ObservedGeneration: o.Generation,
+		})
+	}
+	mc, err := r.cluster(ctx, o.Spec.Placement.ManagementCluster)
+	if err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	rule := automerge.Rule(mc.Spec.AutoMerge, o.Spec.AutoMerge.Rule)
+	if rule == nil {
+		set(metav1.ConditionFalse, "RuleGone", fmt.Sprintf("rule %s is no longer on ManagementCluster %s; a human merges", o.Spec.AutoMerge.Rule, mc.Name))
+		return wait, nil
+	}
+	if ok, why := automerge.Covers(*rule, o.Spec.Template, automerge.Params(o.EffectiveRendered())); !ok {
+		set(metav1.ConditionFalse, "RuleGone", fmt.Sprintf("rule %s no longer covers the order (%s); a human merges", rule.Name, why))
+		return wait, nil
+	}
+	checks, err := r.Git.Checks(ctx, d.Repository, pr.HeadSHA)
+	if err != nil {
+		set(metav1.ConditionUnknown, "Waiting", err.Error())
+		return wait, nil
+	}
+	switch {
+	case len(checks.Failed) > 0:
+		set(metav1.ConditionFalse, "ChecksFailed", "not merging, failed: "+strings.Join(checks.Failed, ", ")+"; a human decides")
+		return wait, nil
+	case len(checks.Pending) > 0:
+		set(metav1.ConditionUnknown, "Waiting", "waiting for checks: "+strings.Join(checks.Pending, ", "))
+		return wait, nil
+	case checks.Total == 0 && time.Since(r.prOpenedAt(o)) < r.settle():
+		set(metav1.ConditionUnknown, "Waiting", "waiting for checks to show up")
+		return wait, nil
+	}
+	method := automerge.Method(mc.Spec.AutoMerge)
+	if err := r.Git.Merge(ctx, d.Repository, d.PullRequest.Number, pr.HeadSHA, method); err != nil {
+		var nm *delivery.NotMergeableError
+		if errors.As(err, &nm) {
+			set(metav1.ConditionFalse, "NotMergeable", nm.Msg+"; a human decides")
+			return wait, nil
+		}
+		return ctrl.Result{}, err
+	}
+	passed := fmt.Sprintf("%d checks passed", checks.Total)
+	if checks.Total == 0 {
+		passed = "no checks"
+	}
+	msg := fmt.Sprintf("auto-merged (%s, rule %s, %s)", method, rule.Name, passed)
+	set(metav1.ConditionTrue, "Merged", msg)
+	o.Status.Message = msg
+	log.FromContext(ctx).Info("auto-merged", "order", o.Name, "pr", d.PullRequest.URL, "rule", rule.Name)
+	// The next read of the PR sees it merged and moves the order on.
+	return ctrl.Result{RequeueAfter: time.Second}, nil
+}
+
+func (r *OrderReconciler) settle() time.Duration {
+	if r.AutoMergeSettle > 0 {
+		return r.AutoMergeSettle
+	}
+	return AutoMergeSettle
+}
+
+// prOpenedAt is when the order reached PROpen.
+func (r *OrderReconciler) prOpenedAt(o *v1alpha1.Order) time.Time {
+	for i := len(o.Status.History) - 1; i >= 0; i-- {
+		if o.Status.History[i].Phase == v1alpha1.PhasePROpen {
+			return o.Status.History[i].Time.Time
+		}
+	}
+	return o.CreationTimestamp.Time
 }
 
 // machineryFor returns the cluster's machinery client, or nil when none is
