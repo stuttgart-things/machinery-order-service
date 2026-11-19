@@ -1,3 +1,10 @@
+## [0.4.1](https://github.com/stuttgart-things/machinery-order-service/compare/v0.4.0...v0.4.1) (2026-11-19)
+
+
+### Bug Fixes
+
+* **controller:** auto-merge state in status.message ([20f0aa3](https://github.com/stuttgart-things/machinery-order-service/commit/20f0aa357ef22288f14748e603771c854e7c2e99))
+
 # [0.4.0](https://github.com/stuttgart-things/machinery-order-service/compare/v0.3.0...v0.4.0) (2026-11-19)
 
 
