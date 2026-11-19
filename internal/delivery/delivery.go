@@ -67,7 +67,25 @@ type Deliverer interface {
 	Close(ctx context.Context, repository string, number int, branch string) error
 	// Contains reports whether commit sha is head or one of its ancestors.
 	Contains(ctx context.Context, repository, sha, head string) (bool, error)
+	Checks(ctx context.Context, repository, sha string) (*Checks, error)
+	Merge(ctx context.Context, repository string, number int, sha, method string) error
 }
+
+// Checks is the state of a commit's check runs and commit statuses.
+type Checks struct {
+	// Total counts the check runs and statuses.
+	Total int
+	// Pending and Failed name the runs/statuses not done or not passed
+	// (success, neutral and skipped pass).
+	Pending []string
+	Failed  []string
+}
+
+// NotMergeableError: GitHub refused the merge (conflict, head moved,
+// branch protection).
+type NotMergeableError struct{ Msg string }
+
+func (e *NotMergeableError) Error() string { return e.Msg }
 
 // ConflictError means the order cannot be delivered as it is: a file or the
 // branch is taken by something else. Retrying does not help.
@@ -369,4 +387,72 @@ func (g *GitHub) Contains(ctx context.Context, repository, sha, head string) (bo
 	}
 	s := cmp.GetStatus()
 	return s == "identical" || s == "ahead", nil
+}
+
+// Checks reads the check runs (latest per name) and commit statuses of sha.
+func (g *GitHub) Checks(ctx context.Context, repository, sha string) (*Checks, error) {
+	owner, repo, err := split(repository)
+	if err != nil {
+		return nil, err
+	}
+	c := &Checks{}
+	opts := &github.ListCheckRunsOptions{Filter: github.Ptr("latest"), ListOptions: github.ListOptions{PerPage: 100}}
+	for {
+		runs, resp, err := g.Client.Checks.ListCheckRunsForRef(ctx, owner, repo, sha, opts)
+		if err != nil {
+			return nil, fmt.Errorf("reading check runs of %s: %w", short(sha), err)
+		}
+		for _, cr := range runs.CheckRuns {
+			c.Total++
+			switch {
+			case cr.GetStatus() != "completed":
+				c.Pending = append(c.Pending, cr.GetName())
+			case cr.GetConclusion() == "success" || cr.GetConclusion() == "neutral" || cr.GetConclusion() == "skipped":
+			default:
+				c.Failed = append(c.Failed, cr.GetName()+" ("+cr.GetConclusion()+")")
+			}
+		}
+		if resp == nil || resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+	st, _, err := g.Client.Repositories.GetCombinedStatus(ctx, owner, repo, sha, &github.ListOptions{PerPage: 100})
+	if err != nil {
+		return nil, fmt.Errorf("reading commit statuses of %s: %w", short(sha), err)
+	}
+	for _, s := range st.Statuses {
+		c.Total++
+		switch s.GetState() {
+		case "success":
+		case "pending":
+			c.Pending = append(c.Pending, s.GetContext())
+		default:
+			c.Failed = append(c.Failed, s.GetContext()+" ("+s.GetState()+")")
+		}
+	}
+	return c, nil
+}
+
+// Merge merges pull request number with method, only while its head is sha.
+func (g *GitHub) Merge(ctx context.Context, repository string, number int, sha, method string) error {
+	owner, repo, err := split(repository)
+	if err != nil {
+		return err
+	}
+	_, resp, err := g.Client.PullRequests.Merge(ctx, owner, repo, number, "", &github.PullRequestOptions{SHA: sha, MergeMethod: method})
+	if err != nil {
+		if resp != nil && (resp.StatusCode == http.StatusMethodNotAllowed || resp.StatusCode == http.StatusConflict) {
+			return &NotMergeableError{Msg: fmt.Sprintf("pull request #%d is not mergeable: %v", number, err)}
+		}
+		return fmt.Errorf("merging pull request #%d: %w", number, err)
+	}
+	return nil
+}
+
+func short(sha string) string {
+	if len(sha) > 7 {
+		return sha[:7]
+	}
+	return sha
 }

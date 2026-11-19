@@ -81,6 +81,42 @@ type Flux struct {
 	RevisionField string `json:"revisionField,omitempty"`
 }
 
+// AutoMerge says which orders the service may merge itself once their
+// checks pass (docs/adr/0002-auto-merge.md). Only orders that ask for it.
+type AutoMerge struct {
+	// Method is the merge method.
+	// +kubebuilder:validation:Enum=merge;squash;rebase
+	// +kubebuilder:default=merge
+	// +optional
+	Method string `json:"method,omitempty"`
+	// Rules: an order that asks for auto-merge must match one of them.
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	Rules []AutoMergeRule `json:"rules,omitempty"`
+}
+
+// AutoMergeRule allows auto-merge for some orderers, templates and
+// parameter values.
+type AutoMergeRule struct {
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+	// Users are orderers (user:default/<name>). A rule without users and
+	// groups matches nobody.
+	// +optional
+	Users []string `json:"users,omitempty"`
+	// Groups are the orderer's groups (group:default/<name>).
+	// +optional
+	Groups []string `json:"groups,omitempty"`
+	// Templates the rule covers; empty = any.
+	// +optional
+	Templates []string `json:"templates,omitempty"`
+	// Parameters limit rendered parameter values (defaults included): each
+	// listed parameter must have one of the values.
+	// +optional
+	Parameters map[string][]string `json:"parameters,omitempty"`
+}
+
 // ManagementClusterSpec describes a cluster that applies orders: Flux pulls
 // its orders directory, Crossplane builds the XRs.
 type ManagementClusterSpec struct {
@@ -98,6 +134,10 @@ type ManagementClusterSpec struct {
 	// Building once machinery sees its XR.
 	// +optional
 	Flux *Flux `json:"flux,omitempty"`
+	// AutoMerge allows the service to merge some orders' pull requests
+	// itself. Unset: every pull request waits for a human.
+	// +optional
+	AutoMerge *AutoMerge `json:"autoMerge,omitempty"`
 	// Cordoned refuses new orders.
 	// +optional
 	Cordoned bool `json:"cordoned,omitempty"`

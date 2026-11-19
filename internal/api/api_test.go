@@ -41,7 +41,13 @@ func newSetup(t *testing.T, withAuth bool) *setup {
 	_ = v1alpha1.AddToScheme(scheme)
 	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha1.Order{}).WithObjects(
 		&v1alpha1.ManagementCluster{ObjectMeta: metav1.ObjectMeta{Name: "machinery"},
-			Spec: v1alpha1.ManagementClusterSpec{GitOps: v1alpha1.GitOps{OrdersPath: "clusters/labda/vsphere/machinery-orders-xrs"}}},
+			Spec: v1alpha1.ManagementClusterSpec{
+				GitOps: v1alpha1.GitOps{OrdersPath: "clusters/labda/vsphere/machinery-orders-xrs"},
+				AutoMerge: &v1alpha1.AutoMerge{Rules: []v1alpha1.AutoMergeRule{{
+					Name: "personas", Groups: []string{"group:default/ai-personas"},
+					Templates: []string{"native-vm-labda-vsphere"}, Parameters: map[string][]string{"size": {"small"}},
+				}}},
+			}},
 		&v1alpha1.ManagementCluster{ObjectMeta: metav1.ObjectMeta{Name: "closed"}, Spec: v1alpha1.ManagementClusterSpec{Cordoned: true}},
 	).Build()
 	s := &setup{c: c, renderer: &rendertest.Fake{}}
@@ -331,5 +337,54 @@ func TestAcceptedAndClusters(t *testing.T) {
 	_, out = s.do(t, "POST", "/api/v1/orders", "", map[string]any{"template": "t", "managementCluster": "nope", "parameters": map[string]any{"name": "x"}})
 	if msg, _ := out["error"].(string); !strings.Contains(msg, "valid: machinery") || strings.Contains(msg, "closed") {
 		t.Errorf("unknown cluster message: %q", msg)
+	}
+}
+
+func TestAutoMergeIntake(t *testing.T) {
+	s := newSetup(t, true)
+	alice := s.token(t, "alice", "backstage-team-ai-personas")
+	dave := s.token(t, "dave", "backstage-team-other")
+	order := func(token, size string, autoMerge bool) (int, map[string]any) {
+		rec, out := s.do(t, "POST", "/api/v1/orders", token, map[string]any{
+			"template": "native-vm-labda-vsphere", "managementCluster": "machinery", "autoMerge": autoMerge,
+			"parameters": map[string]any{"name": "am-" + size, "size": size},
+		})
+		return rec.Code, out
+	}
+
+	code, out := order(alice, "small", true)
+	if code != 201 {
+		t.Fatalf("allowed: %d %v", code, out)
+	}
+	if am, _ := out["spec"].(map[string]any)["autoMerge"].(map[string]any); am["rule"] != "personas" {
+		t.Errorf("spec.autoMerge %v", out["spec"])
+	}
+	for name, tc := range map[string]struct {
+		token, size, want string
+	}{
+		"size not allowed": {alice, "medium", "size=medium not in [small]"},
+		"not in the group": {dave, "small", "personas: not for user:default/dave"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			code, out := order(tc.token, tc.size, true)
+			if code != 403 || !strings.Contains(out["error"].(string), tc.want) {
+				t.Errorf("%d %v, want 403 with %q", code, out, tc.want)
+			}
+		})
+	}
+	code, out = order(dave, "medium", false)
+	if code != 201 || out["spec"].(map[string]any)["autoMerge"] != nil {
+		t.Errorf("without autoMerge: %d %v", code, out["spec"])
+	}
+
+	_, out = s.do(t, "GET", "/api/v1/management-clusters", dave, nil)
+	for _, it := range out["items"].([]any) {
+		c := it.(map[string]any)
+		if c["name"] == "machinery" {
+			rules := c["autoMerge"].(map[string]any)["rules"].([]any)
+			if len(rules) != 1 || rules[0].(map[string]any)["name"] != "personas" {
+				t.Errorf("rules %v", c["autoMerge"])
+			}
+		}
 	}
 }

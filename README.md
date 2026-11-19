@@ -46,12 +46,12 @@ merge its pull request is closed, after the merge only the record goes.
 
 | Method | Path | |
 |---|---|---|
-| `POST` | `/api/v1/orders` | `{"template", "managementCluster", "parameters", "reason"}` → 201 Order, already `Ordered` with a message on what follows, `Location` header. 400 with `fields` when claim-machinery-api rejects parameters, 400 with the valid names for an unknown cluster |
+| `POST` | `/api/v1/orders` | `{"template", "managementCluster", "parameters", "reason", "autoMerge"}` → 201 Order, already `Ordered` with a message on what follows, `Location` header. 400 with `fields` when claim-machinery-api rejects parameters, 400 with the valid names for an unknown cluster, 403 when `autoMerge` matches no rule of the cluster |
 | `GET` | `/api/v1/orders` | `?mine=true`, `?phase=`, `?cluster=`; without the rendered files. Only the orders the caller may see (below) |
 | `GET` | `/api/v1/orders/watch` | Server-Sent Events, `event: order`, same filters and visibility |
 | `GET` | `/api/v1/orders/{id}` | one order with its files; 404 when the caller may not see it |
 | `POST` | `/api/v1/orders/{id}/cancel` | `{"resourceVersion"}` optional: 409 when the order moved. Only before the merge, by whoever may see it |
-| `GET` | `/api/v1/management-clusters` | `{"items": [{"name", "lab", "cordoned", "repository", "ordersPath"}]}`: where orders can go |
+| `GET` | `/api/v1/management-clusters` | `{"items": [{"name", "lab", "cordoned", "repository", "ordersPath", "autoMerge"}]}`: where orders can go, and who may auto-merge what |
 | `GET` | `/ui/` | **My orders**, live through SSE |
 | `GET` | `/ui/orders/{id}` | **Order detail**: timeline, files, PR/commit, order ID, Cancel |
 | `GET` | `/ui/manifest.json` | sthings-portal manifest (no login): title `Orders`, one fragment |
@@ -87,12 +87,15 @@ Group `order.machinery.stuttgart-things.com/v1alpha1`, CRDs in
 
 - **Order** (namespaced, name = order ID `ord-<12 hex>`): `template`,
   `parameters`, `placement.managementCluster`, `requestedBy`, `reason`,
-  `cancel`, and `rendered` (set by the API at intake). Template, placement and
-  rendered are immutable.
+  `cancel`, `rendered` (set by the API at intake) and `autoMerge.rule` (set at
+  intake when the order asked for auto-merge and a rule allowed it).
+  Template, placement, rendered and autoMerge are immutable.
 - **ManagementCluster** (cluster-scoped): `gitops.{repository, baseBranch,
   ordersPath}`, `render.{clusterName, environmentConfig}`,
   `machinery.{endpoint, insecure, tokenSecretRef}`,
-  `flux.{name, namespace, kind, revisionField}`, `cordoned`.
+  `flux.{name, namespace, kind, revisionField}`,
+  `autoMerge.{method, rules[].{name, users, groups, templates, parameters}}`,
+  `cordoned`.
 
 The live side comes from machinery's gRPC `GetResourceDetail` (kind + name of
 the rendered XR). The Applied check reads the Flux Kustomization through
@@ -120,7 +123,31 @@ order goes from Merged to Building once machinery sees its XR.
 | `LOG_FORMAT`, `DEBUG` | `json`; debug logging | text, off |
 
 The GitHub App needs `contents: write` and `pull_requests: write` on the
-GitOps repository.
+GitOps repository; for auto-merge also `checks: read` and `statuses: read`.
+
+## Auto-merge
+
+An order normally waits for a human to merge its pull request. It is merged
+by the service only when the order asks for it (`"autoMerge": true`,
+`claims order --auto-merge`) and a rule of its ManagementCluster allows it:
+
+```yaml
+spec:
+  autoMerge:
+    method: merge                 # merge (default), squash, rebase
+    rules:
+      - name: persona-test-vms
+        groups: [group:default/ai-personas]   # or users: [user:default/<name>]
+        templates: [native-vm-labul-proxmox]  # empty = any
+        parameters: {size: [small]}           # rendered values, defaults included
+```
+
+No matching rule: the order is refused with 403. A matching order merges once
+the checks on the PR's head commit passed (`success`, `neutral`, `skipped`;
+no checks at all after a minute counts as passed). A failed check, a rule
+that was removed or narrowed, or a PR GitHub will not merge leaves it to a
+human; condition `AutoMerge` says why. Decision and limits:
+[ADR 0002](docs/adr/0002-auto-merge.md).
 
 ## Deployment
 
