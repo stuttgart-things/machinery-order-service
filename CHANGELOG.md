@@ -1,3 +1,10 @@
+# [0.3.0](https://github.com/stuttgart-things/machinery-order-service/compare/v0.2.0...v0.3.0) (2026-11-19)
+
+
+### Features
+
+* **api:** order visibility, management clusters, accepted status ([673eab8](https://github.com/stuttgart-things/machinery-order-service/commit/673eab8d3d9bde0dea424adf2c5995d99d4758b8)), closes [#12](https://github.com/stuttgart-things/machinery-order-service/issues/12) [#13](https://github.com/stuttgart-things/machinery-order-service/issues/13) [#14](https://github.com/stuttgart-things/machinery-order-service/issues/14) [#12](https://github.com/stuttgart-things/machinery-order-service/issues/12) [#13](https://github.com/stuttgart-things/machinery-order-service/issues/13) [#14](https://github.com/stuttgart-things/machinery-order-service/issues/14)
+
 # [0.2.0](https://github.com/stuttgart-things/machinery-order-service/compare/v0.1.3...v0.2.0) (2026-11-16)
 
 
