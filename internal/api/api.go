@@ -5,6 +5,7 @@
 //	GET  /api/v1/orders/watch           Server-Sent Events of order changes
 //	GET  /api/v1/orders/{id}            one order
 //	POST /api/v1/orders/{id}/cancel     cancel before the merge
+//	POST /api/v1/orders/{id}/teardown   remove what a merged order built (ADR 0003)
 //	GET  /api/v1/management-clusters    where orders can go
 //	GET  /health, /ready, /version
 //
@@ -76,6 +77,20 @@ type CancelRequest struct {
 	ResourceVersion string `json:"resourceVersion,omitempty"`
 }
 
+// TeardownRequest is the body of POST /api/v1/orders/{id}/teardown
+// (docs/adr/0003-teardown.md).
+type TeardownRequest struct {
+	Reason string `json:"reason,omitempty"`
+	// AutoMerge asks the service to merge the teardown's pull request once
+	// its checks pass. Refused (403) unless the caller placed the order and a
+	// rule of the management cluster allows teardowns for it.
+	AutoMerge bool `json:"autoMerge,omitempty"`
+	// ResourceVersion, when set, must still be the order's (409 otherwise).
+	ResourceVersion string `json:"resourceVersion,omitempty"`
+	// RequestedBy is only taken when auth is off; with auth the login is.
+	RequestedBy string `json:"requestedBy,omitempty"`
+}
+
 // ErrorResponse is every error body; Fields name what is wrong per
 // parameter.
 type ErrorResponse struct {
@@ -97,6 +112,7 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET "+p+"/api/v1/orders/watch", s.watch)
 		mux.HandleFunc("GET "+p+"/api/v1/orders/{id}", s.get)
 		mux.HandleFunc("POST "+p+"/api/v1/orders/{id}/cancel", s.cancel)
+		mux.HandleFunc("POST "+p+"/api/v1/orders/{id}/teardown", s.teardown)
 		mux.HandleFunc("GET "+p+"/api/v1/management-clusters", s.clusters)
 		mux.HandleFunc("GET "+p+"/health", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, map[string]string{"status": "ok"}) })
 		mux.HandleFunc("GET "+p+"/ready", s.ready)
@@ -214,6 +230,116 @@ func (s *Server) MaySee(c *Caller, o *v1alpha1.Order) bool {
 // MayCancel reports whether the caller may cancel o: whoever may see it.
 func (s *Server) MayCancel(c *Caller, o *v1alpha1.Order) bool { return s.MaySee(c, o) }
 
+// MayTearDown reports whether the caller may tear o down: whoever may see it
+// (docs/adr/0003-teardown.md).
+func (s *Server) MayTearDown(c *Caller, o *v1alpha1.Order) bool { return s.MaySee(c, o) }
+
+// TeardownRefused says why o cannot be torn down now, "" when it can.
+func TeardownRefused(o *v1alpha1.Order) string {
+	switch {
+	case o.TornDown():
+		return "the order is torn down already"
+	case o.TeardownRunning():
+		return "a teardown of the order is running"
+	case o.Status.Phase.BeforeMerge():
+		return "the order is not merged yet: cancel it instead"
+	case !o.Status.Phase.Teardownable():
+		return fmt.Sprintf("the order is %s", o.Status.Phase)
+	}
+	return ""
+}
+
+// Teardown asks to tear order id down: the controller opens a delete-claim
+// pull request (docs/adr/0003-teardown.md).
+func (s *Server) Teardown(ctx context.Context, c *Caller, id string, req TeardownRequest) (int, any) {
+	if len(req.Reason) > 500 {
+		return http.StatusBadRequest, ErrorResponse{Error: "reason: at most 500 characters"}
+	}
+	o, err := s.Get(ctx, id)
+	if apierrors.IsNotFound(err) {
+		return http.StatusNotFound, ErrorResponse{Error: "order not found"}
+	}
+	if err != nil {
+		return http.StatusInternalServerError, ErrorResponse{Error: err.Error()}
+	}
+	if !s.MayTearDown(c, o) {
+		return http.StatusNotFound, ErrorResponse{Error: "order not found"}
+	}
+	if req.ResourceVersion != "" && req.ResourceVersion != o.ResourceVersion {
+		return http.StatusConflict, ErrorResponse{Error: "the order changed since it was read; reload and try again"}
+	}
+	if why := TeardownRefused(o); why != "" {
+		return http.StatusConflict, ErrorResponse{Error: "teardown refused: " + why}
+	}
+	by := req.RequestedBy
+	if c.ID != nil {
+		by = c.Ref
+	}
+	attempt := 1
+	if o.Spec.Teardown != nil {
+		attempt = o.Spec.Teardown.Attempt + 1
+	}
+	now := metav1.Now()
+	t := &v1alpha1.TeardownRequest{Attempt: attempt, RequestedBy: by, RequestedAt: &now, Reason: req.Reason}
+	if req.AutoMerge {
+		mc := &v1alpha1.ManagementCluster{}
+		if err := s.Client.Get(ctx, types.NamespacedName{Name: o.Spec.Placement.ManagementCluster}, mc); err != nil {
+			return http.StatusInternalServerError, ErrorResponse{Error: err.Error()}
+		}
+		if by == "" || by != o.Spec.RequestedBy {
+			return http.StatusForbidden, ErrorResponse{Error: fmt.Sprintf(
+				"auto-merge of a teardown is only for the orderer (%s); tear down without autoMerge and a human merges", orNobody(o.Spec.RequestedBy))}
+		}
+		var groups []string
+		if c.ID != nil && s.Auth != nil {
+			groups = s.Auth.Config().Groups(*c.ID)
+		}
+		rule, why := automerge.Find(mc.Spec.AutoMerge, v1alpha1.ActionTeardown, by, groups, o.Spec.Template, automerge.Params(o.EffectiveRendered()))
+		if rule == nil {
+			return http.StatusForbidden, ErrorResponse{Error: fmt.Sprintf(
+				"auto-merge of a teardown not allowed on %s: %s. Tear down without autoMerge and a human merges (rules: GET /api/v1/management-clusters)", mc.Name, why)}
+		}
+		t.AutoMerge = &v1alpha1.OrderAutoMerge{Rule: rule.Name}
+	}
+	o.Spec.Teardown = t
+	if req.ResourceVersion != "" {
+		o.ResourceVersion = req.ResourceVersion
+	}
+	if err := s.Client.Update(ctx, o); err != nil {
+		if apierrors.IsConflict(err) {
+			return http.StatusConflict, ErrorResponse{Error: "the order changed since it was read; reload and try again"}
+		}
+		return http.StatusInternalServerError, ErrorResponse{Error: err.Error()}
+	}
+	slog.Info("order teardown requested", "order", id, "by", by, "attempt", attempt, "autoMerge", t.AutoMerge != nil)
+	return http.StatusAccepted, typed(o)
+}
+
+func (s *Server) teardown(w http.ResponseWriter, r *http.Request) {
+	c, ok := s.Authorize(w, r, false)
+	if !ok {
+		return
+	}
+	var req TeardownRequest
+	if r.ContentLength != 0 {
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+			return
+		}
+	}
+	status, body := s.Teardown(r.Context(), c, r.PathValue("id"), req)
+	writeJSON(w, status, body)
+}
+
+func orNobody(s string) string {
+	if s == "" {
+		return "nobody recorded"
+	}
+	return s
+}
+
 // Owner is the order's owner parameter (user:… or group:…), "" if none.
 func Owner(o *v1alpha1.Order) string {
 	if rd := o.EffectiveRendered(); rd != nil && rd.Parameters != nil {
@@ -306,7 +432,7 @@ func (s *Server) Create(ctx context.Context, c *Caller, req CreateRequest) (int,
 		if c.ID != nil && s.Auth != nil {
 			groups = s.Auth.Config().Groups(*c.ID)
 		}
-		rule, why := automerge.Find(mc.Spec.AutoMerge, requestedBy, groups, req.Template, automerge.Params(rd))
+		rule, why := automerge.Find(mc.Spec.AutoMerge, v1alpha1.ActionOrder, requestedBy, groups, req.Template, automerge.Params(rd))
 		if rule == nil {
 			return http.StatusForbidden, ErrorResponse{Error: fmt.Sprintf(
 				"auto-merge not allowed on %s: %s. Order without autoMerge and a human merges (rules: GET /api/v1/management-clusters)", mc.Name, why)}
@@ -497,7 +623,7 @@ func (s *Server) Cancel(ctx context.Context, c *Caller, id, resourceVersion stri
 	case o.Status.Phase.Terminal():
 		return http.StatusConflict, ErrorResponse{Error: fmt.Sprintf("the order is %s", o.Status.Phase)}
 	case !o.Status.Phase.BeforeMerge():
-		return http.StatusConflict, ErrorResponse{Error: "the order is merged: cancelling is not possible, removing it needs a teardown"}
+		return http.StatusConflict, ErrorResponse{Error: "the order is merged: cancelling is not possible, tear it down instead (POST /api/v1/orders/{id}/teardown)"}
 	}
 	o.Spec.Cancel = true
 	if resourceVersion != "" {

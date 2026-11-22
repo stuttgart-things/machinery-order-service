@@ -19,7 +19,7 @@ const (
 )
 
 // Phase is where an order stands, across git and the live side.
-// +kubebuilder:validation:Enum=Ordered;Placed;PROpen;Merged;Applied;Building;Ready;Deleted;Cancelled;Failed
+// +kubebuilder:validation:Enum=Ordered;Placed;PROpen;Merged;Applied;Building;Ready;TeardownPROpen;TearingDown;Deleted;Cancelled;Failed
 type Phase string
 
 const (
@@ -30,9 +30,16 @@ const (
 	PhaseApplied  Phase = "Applied"
 	PhaseBuilding Phase = "Building"
 	PhaseReady    Phase = "Ready"
-	// PhaseDeleted: the XR was Ready and machinery no longer sees it (a
-	// teardown, or the XR got lost). Not terminal: should the XR come back,
-	// the order follows it again.
+	// PhaseTeardownPROpen: the teardown's delete-claim pull request is open
+	// (docs/adr/0003-teardown.md).
+	PhaseTeardownPROpen Phase = "TeardownPROpen"
+	// PhaseTearingDown: the teardown is merged; the fleet repo's
+	// delete-claim-xr.yaml deletes the XR, the order waits until machinery no
+	// longer sees it.
+	PhaseTearingDown Phase = "TearingDown"
+	// PhaseDeleted: the XR is gone. After a teardown this is final; without
+	// one (the XR was Ready and got lost) it is not terminal: should the XR
+	// come back, the order follows it again.
 	PhaseDeleted   Phase = "Deleted"
 	PhaseCancelled Phase = "Cancelled"
 	PhaseFailed    Phase = "Failed"
@@ -41,6 +48,16 @@ const (
 // Terminal reports whether nothing moves an order out of the phase any more.
 func (p Phase) Terminal() bool {
 	return p == PhaseCancelled || p == PhaseFailed
+}
+
+// Teardownable reports whether a teardown may start from the phase: the
+// order's files are on the base branch and no teardown runs.
+func (p Phase) Teardownable() bool {
+	switch p {
+	case PhaseMerged, PhaseApplied, PhaseBuilding, PhaseReady, PhaseDeleted:
+		return true
+	}
+	return false
 }
 
 // BeforeMerge reports whether the order's files are not on the default
@@ -70,7 +87,8 @@ type Placement struct {
 	InfraTarget string `json:"infraTarget,omitempty"`
 }
 
-// OrderSpec is what was ordered. Only Cancel changes after the intake.
+// OrderSpec is what was ordered. Only Cancel and Teardown change after the
+// intake.
 //
 // +kubebuilder:validation:XValidation:rule="self.template == oldSelf.template && self.placement == oldSelf.placement",message="template and placement are immutable"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.rendered) || (has(self.rendered) && self.rendered == oldSelf.rendered)",message="rendered is immutable once set"
@@ -108,7 +126,7 @@ type OrderSpec struct {
 	Delivery DeliveryMode `json:"delivery,omitempty"`
 	// Cancel asks to withdraw the order. Before the merge the pull request is
 	// closed and the order ends Cancelled; after the merge it is refused
-	// (that needs a teardown, which comes later).
+	// (spec.teardown removes a merged order, docs/adr/0003-teardown.md).
 	// +optional
 	Cancel bool `json:"cancel,omitempty"`
 	// AutoMerge is set when the orderer asked the service to merge the pull
@@ -116,6 +134,76 @@ type OrderSpec struct {
 	// (docs/adr/0002-auto-merge.md). Unset: a human merges.
 	// +optional
 	AutoMerge *OrderAutoMerge `json:"autoMerge,omitempty"`
+	// Teardown asks to remove what the order built, through a delete-claim
+	// pull request (docs/adr/0003-teardown.md). Set by
+	// POST /api/v1/orders/{id}/teardown; a new request raises Attempt.
+	// +optional
+	Teardown *TeardownRequest `json:"teardown,omitempty"`
+}
+
+// TeardownRequest is one request to tear an order down.
+type TeardownRequest struct {
+	// Attempt numbers the requests; status.teardown.attempt says which one
+	// the status is about.
+	// +kubebuilder:validation:Minimum=1
+	Attempt int `json:"attempt"`
+	// RequestedBy is who asked (user:default/<name>).
+	// +optional
+	RequestedBy string `json:"requestedBy,omitempty"`
+	// +optional
+	RequestedAt *metav1.Time `json:"requestedAt,omitempty"`
+	// Reason is shown in the pull request body.
+	// +optional
+	// +kubebuilder:validation:MaxLength=500
+	Reason string `json:"reason,omitempty"`
+	// AutoMerge names the rule that allowed the service to merge the
+	// teardown pull request itself. Unset: a human merges.
+	// +optional
+	AutoMerge *OrderAutoMerge `json:"autoMerge,omitempty"`
+}
+
+// TeardownStatus is where the teardown of spec.teardown stands.
+type TeardownStatus struct {
+	// Attempt is the spec.teardown.attempt this status is about.
+	Attempt int `json:"attempt"`
+	// FromPhase is the phase the order was in when the teardown started; a
+	// withdrawn teardown goes back to it.
+	// +optional
+	FromPhase Phase `json:"fromPhase,omitempty"`
+	// Outcome is empty while the teardown runs, Withdrawn when its pull
+	// request was closed unmerged, Failed when it could not be delivered,
+	// Deleted once the XR is gone.
+	// +optional
+	// +kubebuilder:validation:Enum=Withdrawn;Failed;Deleted
+	Outcome string `json:"outcome,omitempty"`
+	// Delivery is the teardown's pull request.
+	// +optional
+	Delivery *DeliveryStatus `json:"delivery,omitempty"`
+}
+
+// Teardown outcomes.
+const (
+	TeardownWithdrawn = "Withdrawn"
+	TeardownFailed    = "Failed"
+	TeardownDeleted   = "Deleted"
+)
+
+// TeardownPending reports whether spec.teardown asks for a teardown the
+// controller has not started yet.
+func (o *Order) TeardownPending() bool {
+	t := o.Spec.Teardown
+	return t != nil && (o.Status.Teardown == nil || o.Status.Teardown.Attempt != t.Attempt)
+}
+
+// TeardownRunning reports whether a teardown was asked for or started and
+// has no outcome yet.
+func (o *Order) TeardownRunning() bool {
+	return o.TeardownPending() || (o.Status.Teardown != nil && o.Status.Teardown.Outcome == "")
+}
+
+// TornDown reports whether a teardown deleted what the order built.
+func (o *Order) TornDown() bool {
+	return o.Status.Teardown != nil && o.Status.Teardown.Outcome == TeardownDeleted
 }
 
 // OrderAutoMerge records which rule allowed the auto-merge.
@@ -246,6 +334,9 @@ type OrderStatus struct {
 	// History is the phase timeline, oldest first.
 	// +optional
 	History []PhaseTransition `json:"history,omitempty"`
+	// Teardown is the teardown's progress (spec.teardown).
+	// +optional
+	Teardown *TeardownStatus `json:"teardown,omitempty"`
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 	// +optional

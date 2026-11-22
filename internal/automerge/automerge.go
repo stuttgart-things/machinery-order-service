@@ -62,15 +62,28 @@ func Covers(r v1alpha1.AutoMergeRule, template string, params map[string]any) (b
 	return true, ""
 }
 
-// Find returns the first rule of am that allows the order, or nil and why
+// AllowsAction reports whether rule r covers the action; a rule without
+// actions covers orders only (docs/adr/0003-teardown.md).
+func AllowsAction(r v1alpha1.AutoMergeRule, action v1alpha1.AutoMergeAction) bool {
+	if len(r.Actions) == 0 {
+		return action == v1alpha1.ActionOrder
+	}
+	return slices.Contains(r.Actions, action)
+}
+
+// Find returns the first rule of am that allows the action, or nil and why
 // none does.
-func Find(am *v1alpha1.AutoMerge, requestedBy string, groups []string, template string, params map[string]any) (*v1alpha1.AutoMergeRule, string) {
+func Find(am *v1alpha1.AutoMerge, action v1alpha1.AutoMergeAction, requestedBy string, groups []string, template string, params map[string]any) (*v1alpha1.AutoMergeRule, string) {
 	if am == nil || len(am.Rules) == 0 {
 		return nil, "the management cluster has no auto-merge rules"
 	}
 	var why []string
 	for i := range am.Rules {
 		r := am.Rules[i]
+		if !AllowsAction(r, action) {
+			why = append(why, fmt.Sprintf("%s: not for %ss", r.Name, action))
+			continue
+		}
 		if !Allows(r, requestedBy, groups) {
 			why = append(why, fmt.Sprintf("%s: not for %s", r.Name, orNobody(requestedBy)))
 			continue

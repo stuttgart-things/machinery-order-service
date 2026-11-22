@@ -121,6 +121,8 @@ const detailBodyDef = `{{define "body"}}{{with .Order}}
       {{with .CommitSHA}}<dt>Commit</dt><dd><code>{{short .}}</code></dd>{{end}}
       {{with .MergeSHA}}<dt>Merge</dt><dd><code>{{short .}}</code></dd>{{end}}
     {{end}}
+    {{with .Status.Teardown}}{{with .Delivery}}{{with .PullRequest}}<dt>Teardown</dt><dd><a href="{{.URL}}" target="_blank" rel="noopener">#{{.Number}}</a> <span class="muted">{{.State}}</span></dd>{{end}}{{end}}{{with .Outcome}}<dt>Teardown outcome</dt><dd>{{.}}</dd>{{end}}{{end}}
+    {{with .Spec.Teardown}}{{with .Reason}}<dt>Teardown reason</dt><dd>{{.}}</dd>{{end}}{{end}}
     {{with .Status.Flux}}<dt>Flux</dt><dd><code>{{.LastAppliedRevision}}</code></dd>{{end}}
     {{with .Status.XRRef}}<dt>XR</dt><dd><code>{{.Kind}} {{if .Namespace}}{{.Namespace}}/{{end}}{{.Name}}</code></dd>{{end}}
     {{$gone := eq .Status.Phase "Deleted"}}{{with .Status.Live}}<dt>Live</dt><dd>{{if .Ready}}<span class="pill ok">Ready</span>{{else if .Found}}<span class="pill busy">building</span>{{else if $gone}}<span class="pill muted">gone</span>{{else}}<span class="muted">not seen by machinery yet</span>{{end}} {{with .Address}}<code>{{.}}</code>{{end}} <span class="muted">{{.StatusMessage}}{{if and $gone .LastSeenAt}}last seen {{.LastSeenAt.UTC.Format "2006-01-02 15:04:05"}}{{end}}</span></dd>
@@ -135,6 +137,14 @@ const detailBodyDef = `{{define "body"}}{{with .Order}}
 <form hx-post="ui/orders/{{.Order.Name}}/cancel" hx-target="#detail" hx-confirm="Cancel this order? Its pull request is closed and nothing is built.">
   <input type="hidden" name="resourceVersion" value="{{.Order.ResourceVersion}}">
   <button class="danger" type="submit">Cancel order</button>
+</form>
+{{end}}
+{{if .CanTearDown}}
+<h2>Tear down</h2>
+<form hx-post="ui/orders/{{.Order.Name}}/teardown" hx-target="#detail" hx-confirm="Tear this order down? A delete-claim pull request removes its file; merging it deletes the object.">
+  <input type="hidden" name="resourceVersion" value="{{.Order.ResourceVersion}}">
+  <input type="text" name="reason" maxlength="500" placeholder="Reason (optional)">
+  <button class="danger" type="submit">Tear down</button>
 </form>
 {{end}}
 <h2>Files</h2>

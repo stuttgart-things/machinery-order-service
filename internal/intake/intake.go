@@ -303,3 +303,50 @@ func ConventionFor(o *v1alpha1.Order, rd *v1alpha1.Rendered, tmpl *render.Templa
 		Body:   b.String(),
 	}, nil
 }
+
+// TeardownLabel is the label of a delete-claim pull request, as claims
+// delete and the fleet repo's dispatch-delete-claim.yaml set it.
+const TeardownLabel = "delete-claim"
+
+// TeardownConventionFor is the delete-claim pull request that removes what o
+// built (docs/adr/0003-teardown.md). The branch prefix delete-claim/ is what
+// the fleet repo's pr-claim-delete.yaml gates and delete-claim-xr.yaml acts
+// on after the merge; title and label follow claims delete.
+func TeardownConventionFor(o *v1alpha1.Order, files []string) Convention {
+	x := o.Status.XRRef
+	ns := x.Namespace
+	if ns == "" {
+		ns = "default"
+	}
+	t := o.Spec.Teardown
+	var b strings.Builder
+	_, _ = fmt.Fprintf(&b, "Tears down order `%s`: removes the claim file of\n\n", o.Name)
+	b.WriteString("| | |\n|---|---|\n")
+	_, _ = fmt.Fprintf(&b, "| Kind | `%s` |\n| Name | `%s/%s` |\n", x.Kind, ns, x.Name)
+	if d := o.Status.Delivery; d != nil && d.PullRequest != nil {
+		_, _ = fmt.Fprintf(&b, "| Ordered in | %s |\n", d.PullRequest.URL)
+	}
+	if o.Spec.RequestedBy != "" {
+		_, _ = fmt.Fprintf(&b, "| Ordered by | `%s` |\n", o.Spec.RequestedBy)
+	}
+	if t != nil && t.RequestedBy != "" {
+		_, _ = fmt.Fprintf(&b, "| Requested by | `%s` |\n", t.RequestedBy)
+	}
+	b.WriteString("\n")
+	if t != nil && t.Reason != "" {
+		_, _ = fmt.Fprintf(&b, "**Reason:** %s\n\n", t.Reason)
+	}
+	b.WriteString("Files:\n\n")
+	for _, f := range files {
+		_, _ = fmt.Fprintf(&b, "- `%s`\n", f)
+	}
+	b.WriteString("\n**Merging deletes the object.** `pr-claim-delete.yaml` checks that this deletes exactly this claim " +
+		"and nothing else. Once it is merged, `delete-claim-xr.yaml` waits for Flux to apply the revision and then " +
+		"deletes the object on the management cluster.\n")
+	_, _ = fmt.Fprintf(&b, "\nOrder ID: `%s`\n\n---\n*Opened by machinery-order-service (teardown)*\n", o.Name)
+	return Convention{
+		Branch: "delete-claim/" + x.Name,
+		Title:  fmt.Sprintf("Delete claim: %s/%s", x.Kind, x.Name),
+		Body:   b.String(),
+	}
+}
