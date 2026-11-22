@@ -97,6 +97,12 @@ func TestPagesUnderBasePath(t *testing.T) {
 	if strings.Contains(b, "Cancel order") {
 		t.Error("a Ready order offers Cancel")
 	}
+	if !strings.Contains(b, "Tear down") || !strings.Contains(b, `hx-post="ui/orders/ord-b/teardown"`) {
+		t.Error("a Ready order offers no teardown")
+	}
+	if strings.Contains(a, `ui/orders/ord-a/teardown`) {
+		t.Error("an open order offers a teardown")
+	}
 	if code, _ := get(t, h, "/orders/ui/static/htmx.min.js", nil); code != 200 {
 		t.Errorf("htmx: %d", code)
 	}
@@ -211,5 +217,39 @@ func TestPortalFragment(t *testing.T) {
 		if !strings.HasPrefix(href[1], "/orders/") {
 			t.Errorf("fragment URL without the prefix: %s", href[1])
 		}
+	}
+}
+
+func TestTeardownButton(t *testing.T) {
+	iss := authtest.NewIssuer(t)
+	a, err := auth.New(auth.Config{Issuer: iss.URL(), Audiences: []string{"x"}, CAFile: iss.CAFile, TrustForwardedUser: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, c := handler(t, a, order("ord-a", "user:default/alice", v1alpha1.PhaseReady), order("ord-b", "user:default/bob", v1alpha1.PhaseReady))
+	alice := map[string]string{"X-Forwarded-User": "alice@sthings.example"}
+	if _, other := get(t, h, "/orders/ui/orders/ord-b", alice); strings.Contains(other, "teardown") {
+		t.Error("alice may tear down bob's order")
+	}
+	o := &v1alpha1.Order{}
+	_ = c.Get(context.Background(), client.ObjectKey{Namespace: "orders", Name: "ord-a"}, o)
+	form := url.Values{"resourceVersion": {o.ResourceVersion}, "reason": {"no longer needed"}}
+	req := httptest.NewRequest("POST", "/orders/ui/orders/ord-a/teardown", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("X-Forwarded-User", "alice@sthings.example")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("teardown: %d %s", rec.Code, rec.Body)
+	}
+	_ = c.Get(context.Background(), client.ObjectKey{Namespace: "orders", Name: "ord-a"}, o)
+	if td := o.Spec.Teardown; td == nil || td.Reason != "no longer needed" || td.AutoMerge != nil || td.RequestedBy != "user:default/alice" {
+		t.Errorf("spec.teardown %+v", td)
+	}
+	if strings.Contains(rec.Body.String(), `ui/orders/ord-a/teardown`) {
+		t.Error("the button is still there while the teardown runs")
+	}
+	if !strings.Contains(rec.Body.String(), "TeardownPROpen") {
+		t.Error("the timeline shows no teardown")
 	}
 }

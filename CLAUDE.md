@@ -32,9 +32,12 @@ API (`apiRunnable`, every replica).
   else the service's (`CLAIM_API_*`).
 - `internal/delivery` - GitHub API only (git data API: tree, commit, ref; no
   clone). Idempotent `Open` recognises its own branch/PR by the `Order-Id:`
-  commit trailer. `ConflictError` = taken file/branch (order Failed).
+  commit trailer; `File.Delete` removes a file (teardown). A foreign branch
+  whose head is on the base is deleted and recreated (#20). `ConflictError` =
+  taken file/branch (order Failed; a teardown only records it).
 - `internal/machinery` - gRPC client for machinery `GetResourceDetail`.
-- `internal/controller` - the phase machine. `step` loops `advance` until the
+- `internal/controller` - the phase machine (`teardown.go`: ADR 0003,
+  delete-claim PR, `TeardownPROpen` → `TearingDown` → `Deleted`). `step` loops `advance` until the
   phase stops moving. Errors that retrying cannot fix end in `Failed`
   (`fail`), others go back to controller-runtime's backoff.
 - `internal/api` - REST + SSE (`Hub`, fed by the Order informer). `Create`,
@@ -67,7 +70,8 @@ API (`apiRunnable`, every replica).
 ## Rules
 
 - The service never writes to a management cluster; git is its only write path.
-- Deleting an Order never tears anything down.
+- Deleting an Order never tears anything down. A teardown is a
+  `delete-claim/<xr>` PR; the fleet repo's `delete-claim-xr.yaml` deletes the XR.
 - Intake renders with the orderer's token and stores it in `spec.rendered`
   (immutable); the controller only renders when that is empty.
 - UI URLs must stay relative (web tests check for absolute paths).

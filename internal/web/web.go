@@ -1,9 +1,9 @@
 // Package web is the UI, stage 1 of stuttgart-things/stuttgart-things#4300:
-// two pages, read-only except Cancel. No ordering form: orders come in
+// two pages, read-only except Cancel and Tear down. No ordering form: orders come in
 // through the API (claims, Backstage).
 //
 //	ui/                 My orders: phase, cluster, PR, live status; SSE updates
-//	ui/orders/{id}      Order detail: timeline, files, PR/commit, order ID, Cancel
+//	ui/orders/{id}      Order detail: timeline, files, PR/commit, order ID, Cancel, Tear down
 //	ui/manifest.json    sthings-portal manifest (no login)
 //	ui/fragment/orders  portal overview fragment: my orders by state, newest
 //
@@ -22,6 +22,7 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -49,6 +50,7 @@ func (u *UI) Register(mux *http.ServeMux, prefix string) {
 	mux.HandleFunc("GET "+prefix+"/ui/orders/{id}", u.detail)
 	mux.HandleFunc("GET "+prefix+"/ui/orders/{id}/body", u.detailBody)
 	mux.HandleFunc("POST "+prefix+"/ui/orders/{id}/cancel", u.cancel)
+	mux.HandleFunc("POST "+prefix+"/ui/orders/{id}/teardown", u.teardown)
 	mux.HandleFunc("GET "+prefix+"/ui/manifest.json", u.manifest)
 	mux.HandleFunc("GET "+prefix+"/ui/fragment/orders", u.ordersFragment)
 	mux.Handle("GET "+prefix+"/ui/static/", http.StripPrefix(prefix+"/ui/", http.FileServerFS(staticFS)))
@@ -159,11 +161,12 @@ func (u *UI) events(w http.ResponseWriter, r *http.Request) {
 }
 
 type detailData struct {
-	Page      page
-	Order     *v1alpha1.Order
-	Files     []v1alpha1.RenderedFile
-	CanCancel bool
-	Error     string
+	Page        page
+	Order       *v1alpha1.Order
+	Files       []v1alpha1.RenderedFile
+	CanCancel   bool
+	CanTearDown bool
+	Error       string
 }
 
 func (u *UI) load(w http.ResponseWriter, r *http.Request) (*api.Caller, *detailData, bool) {
@@ -185,6 +188,7 @@ func (u *UI) load(w http.ResponseWriter, r *http.Request) (*api.Caller, *detailD
 		d.Files = rd.Files
 	}
 	d.CanCancel = o.Status.Phase.BeforeMerge() && !o.Spec.Cancel && u.API.MayCancel(c, o)
+	d.CanTearDown = api.TeardownRefused(o) == "" && u.API.MayTearDown(c, o)
 	return c, d, true
 }
 
@@ -207,8 +211,27 @@ func (u *UI) cancel(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.PathValue("id")
 	status, body := u.API.Cancel(r.Context(), c, id, r.FormValue("resourceVersion"))
+	u.after(w, r, id, status, body, "cancel failed")
+}
+
+// teardown asks for a teardown from the UI. The UI never asks for
+// auto-merge: a human merges (docs/adr/0003-teardown.md).
+func (u *UI) teardown(w http.ResponseWriter, r *http.Request) {
+	c, ok := u.authorize(w, r)
+	if !ok {
+		return
+	}
+	id := r.PathValue("id")
+	status, body := u.API.Teardown(r.Context(), c, id, api.TeardownRequest{
+		Reason: strings.TrimSpace(r.FormValue("reason")), ResourceVersion: r.FormValue("resourceVersion"),
+	})
+	u.after(w, r, id, status, body, "teardown failed")
+}
+
+// after answers an action: the error, or the reloaded detail body.
+func (u *UI) after(w http.ResponseWriter, r *http.Request, id string, status int, body any, failed string) {
 	if status/100 != 2 {
-		msg := "cancel failed"
+		msg := failed
 		if e, ok := body.(api.ErrorResponse); ok {
 			msg = e.Error
 		}
@@ -217,7 +240,7 @@ func (u *UI) cancel(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprintf(w, `<p class="error">%s</p>`, template.HTMLEscapeString(msg))
 		return
 	}
-	// Reload the detail body; the controller closes the PR right after.
+	// Reload the detail body; the controller acts right after.
 	r2 := r.Clone(r.Context())
 	r2.SetPathValue("id", id)
 	u.detailBody(w, r2)
@@ -263,13 +286,20 @@ var path = []v1alpha1.Phase{
 	v1alpha1.PhaseApplied, v1alpha1.PhaseBuilding, v1alpha1.PhaseReady,
 }
 
+// teardownPath follows path once a teardown was asked for.
+var teardownPath = []v1alpha1.Phase{v1alpha1.PhaseTeardownPROpen, v1alpha1.PhaseTearingDown, v1alpha1.PhaseDeleted}
+
 func timeline(o *v1alpha1.Order) []step {
 	seen := map[v1alpha1.Phase]v1alpha1.PhaseTransition{}
 	for _, h := range o.Status.History {
 		seen[h.Phase] = h
 	}
 	var out []step
-	for _, p := range path {
+	phases := path
+	if o.Spec.Teardown != nil {
+		phases = append(slices.Clone(path), teardownPath...)
+	}
+	for _, p := range phases {
 		s := step{Phase: p, State: "todo"}
 		if h, ok := seen[p]; ok {
 			s.State, s.Time, s.Message = "done", h.Time.UTC().Format(time.DateTime), h.Message
@@ -279,7 +309,7 @@ func timeline(o *v1alpha1.Order) []step {
 		}
 		out = append(out, s)
 	}
-	if o.Status.Phase.Terminal() || o.Status.Phase == v1alpha1.PhaseDeleted {
+	if o.Status.Phase.Terminal() || (o.Status.Phase == v1alpha1.PhaseDeleted && o.Spec.Teardown == nil) {
 		h := seen[o.Status.Phase]
 		out = append(out, step{Phase: o.Status.Phase, State: "current", Time: h.Time.UTC().Format(time.DateTime), Message: h.Message})
 	}

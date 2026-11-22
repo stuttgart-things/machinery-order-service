@@ -77,6 +77,20 @@ spec:
                         AutoMergeRule allows auto-merge for some orderers, templates and
                         parameter values.
                       properties:
+                        actions:
+                          description: |-
+                            Actions the rule allows: order (the order's own pull request) and
+                            teardown (its delete-claim pull request, docs/adr/0003-teardown.md).
+                            Empty = [order].
+                          items:
+                            description: AutoMergeAction is what a rule lets the service
+                              merge.
+                            enum:
+                            - order
+                            - teardown
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: set
                         groups:
                           description: Groups are the orderer's groups (group:default/<name>).
                           items:

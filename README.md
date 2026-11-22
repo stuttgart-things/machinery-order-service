@@ -26,6 +26,12 @@ claims CLI / Backstage ──REST + ZITADEL token──▶ machinery-order-servi
 **The service never applies anything to a management cluster.** Its only
 write path is git. Deleting an Order never tears anything down: before the
 merge its pull request is closed, after the merge only the record goes.
+Removing what an order built is a **teardown** ([ADR 0003](docs/adr/0003-teardown.md)):
+the service opens a `delete-claim/<xr>` pull request that removes the order's
+file, and after its merge the fleet repo's `delete-claim-xr.yaml` deletes the
+XR. The service deletes its own branches once their pull request is merged or
+closed, and replaces a leftover branch of the same name whose commits are all
+on the base branch.
 
 ## Phases
 
@@ -38,7 +44,9 @@ merge its pull request is closed, after the merge only the record goes.
 | `Applied` | the cluster's Flux Kustomization is at or past the merge |
 | `Building` | machinery sees the XR, not Ready yet |
 | `Ready` | machinery reports the XR Ready (`status.live`: address, info) |
-| `Deleted` | the XR was Ready and machinery no longer sees it (teardown, or lost). `status.live` keeps the last address and info, `lastSeenAt` says when; should the XR come back, the order follows it again |
+| `TeardownPROpen` | teardown requested, `delete-claim/<xr>` pull request open (`status.teardown`); closed unmerged = withdrawn, back to the phase before |
+| `TearingDown` | teardown merged; waiting until `delete-claim-xr.yaml` deleted the XR. A failed `Delete-XR` check shows in condition `Teardown` with the retry command |
+| `Deleted` | machinery no longer sees the XR. After a teardown this is final; otherwise (the XR was Ready and got lost) the order follows it again should it come back. `status.live` keeps the last address and info, `lastSeenAt` says when |
 | `Cancelled` | cancelled before the merge, or the PR was closed unmerged |
 | `Failed` | cannot go on as is: invalid parameters, a taken name or branch, cordoned cluster |
 
@@ -51,9 +59,10 @@ merge its pull request is closed, after the merge only the record goes.
 | `GET` | `/api/v1/orders/watch` | Server-Sent Events, `event: order`, same filters and visibility |
 | `GET` | `/api/v1/orders/{id}` | one order with its files; 404 when the caller may not see it |
 | `POST` | `/api/v1/orders/{id}/cancel` | `{"resourceVersion"}` optional: 409 when the order moved. Only before the merge, by whoever may see it |
+| `POST` | `/api/v1/orders/{id}/teardown` | `{"reason", "autoMerge", "resourceVersion"}` → 202. Only merged orders, by whoever may see them; 409 before the merge, while a teardown runs or after one completed; 403 when `autoMerge` is asked by someone other than the orderer or matches no rule with `actions: [teardown]` |
 | `GET` | `/api/v1/management-clusters` | `{"items": [{"name", "lab", "cordoned", "repository", "ordersPath", "autoMerge"}]}`: where orders can go, and who may auto-merge what |
 | `GET` | `/ui/` | **My orders**, live through SSE |
-| `GET` | `/ui/orders/{id}` | **Order detail**: timeline, files, PR/commit, order ID, Cancel |
+| `GET` | `/ui/orders/{id}` | **Order detail**: timeline, files, PR/commit, order ID, Cancel, Tear down (a human merges) |
 | `GET` | `/ui/manifest.json` | sthings-portal manifest (no login): title `Orders`, one fragment |
 | `GET` | `/ui/fragment/orders` | Portal overview fragment: the caller's orders open/ready/failed and the newest five, linked to their detail |
 | `GET` | `/health`, `/ready`, `/version` | |
@@ -87,14 +96,17 @@ Group `order.machinery.stuttgart-things.com/v1alpha1`, CRDs in
 
 - **Order** (namespaced, name = order ID `ord-<12 hex>`): `template`,
   `parameters`, `placement.managementCluster`, `requestedBy`, `reason`,
-  `cancel`, `rendered` (set by the API at intake) and `autoMerge.rule` (set at
-  intake when the order asked for auto-merge and a rule allowed it).
+  `cancel`, `rendered` (set by the API at intake), `autoMerge.rule` (set at
+  intake when the order asked for auto-merge and a rule allowed it) and
+  `teardown.{attempt, requestedBy, requestedAt, reason, autoMerge.rule}` (set
+  by the teardown endpoint).
   Template, placement, rendered and autoMerge are immutable.
 - **ManagementCluster** (cluster-scoped): `gitops.{repository, baseBranch,
   ordersPath}`, `render.{clusterName, environmentConfig}`,
   `machinery.{endpoint, insecure, tokenSecretRef}`,
   `flux.{name, namespace, kind, revisionField}`,
-  `autoMerge.{method, rules[].{name, users, groups, templates, parameters}}`,
+  `autoMerge.{method, rules[].{name, users, groups, templates, parameters, actions}}`
+  (`actions`: `order`, `teardown`; empty = `[order]`),
   `cordoned`.
 
 The live side comes from machinery's gRPC `GetResourceDetail` (kind + name of

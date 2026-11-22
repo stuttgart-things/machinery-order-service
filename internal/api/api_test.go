@@ -388,3 +388,95 @@ func TestAutoMergeIntake(t *testing.T) {
 		}
 	}
 }
+
+func TestTeardown(t *testing.T) {
+	s := newSetup(t, true)
+	ctx := context.Background()
+	alice := s.token(t, "alice", "backstage-team-ai-personas")
+	carol := s.token(t, "carol", "backstage-team-ai-personas")
+	dave := s.token(t, "dave", "backstage-team-other")
+	rec, out := s.do(t, "POST", "/api/v1/orders", alice, map[string]any{
+		"template": "native-vm-labda-vsphere", "managementCluster": "machinery",
+		"parameters": map[string]any{"name": "td", "size": "small", "owner": "group:default/ai-personas"},
+	})
+	if rec.Code != 201 {
+		t.Fatalf("order: %d %v", rec.Code, out)
+	}
+	id := out["metadata"].(map[string]any)["name"].(string)
+	path := "/api/v1/orders/" + id + "/teardown"
+	teardown := func(token string, body map[string]any) (int, map[string]any) {
+		rec, out := s.do(t, "POST", path, token, body)
+		return rec.Code, out
+	}
+	setStatus := func(f func(o *v1alpha1.Order)) {
+		o := &v1alpha1.Order{}
+		if err := s.c.Get(ctx, client.ObjectKey{Namespace: "orders", Name: id}, o); err != nil {
+			t.Fatal(err)
+		}
+		f(o)
+		if err := s.c.Status().Update(ctx, o); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if code, out := teardown(alice, nil); code != 409 || !strings.Contains(out["error"].(string), "cancel it instead") {
+		t.Errorf("before the merge: %d %v", code, out)
+	}
+	setStatus(func(o *v1alpha1.Order) { o.Status.Phase = v1alpha1.PhaseReady })
+
+	if code, _ := teardown(dave, nil); code != 404 {
+		t.Errorf("a stranger: %d, want 404", code)
+	}
+	// The rule does not allow teardowns yet.
+	if code, out := teardown(alice, map[string]any{"autoMerge": true}); code != 403 || !strings.Contains(out["error"].(string), "personas: not for teardowns") {
+		t.Errorf("rule without teardown: %d %v", code, out)
+	}
+	mc := &v1alpha1.ManagementCluster{}
+	if err := s.c.Get(ctx, client.ObjectKey{Name: "machinery"}, mc); err != nil {
+		t.Fatal(err)
+	}
+	mc.Spec.AutoMerge.Rules[0].Actions = []v1alpha1.AutoMergeAction{v1alpha1.ActionOrder, v1alpha1.ActionTeardown}
+	if err := s.c.Update(ctx, mc); err != nil {
+		t.Fatal(err)
+	}
+	// A teammate may tear down, but not with auto-merge.
+	if code, out := teardown(carol, map[string]any{"autoMerge": true}); code != 403 || !strings.Contains(out["error"].(string), "only for the orderer") {
+		t.Errorf("teammate with auto-merge: %d %v", code, out)
+	}
+	if code, out := teardown(alice, map[string]any{"autoMerge": true, "reason": "done", "unknown": 1}); code != 400 {
+		t.Errorf("unknown field: %d %v", code, out)
+	}
+	code, out := teardown(alice, map[string]any{"autoMerge": true, "reason": "done"})
+	if code != 202 {
+		t.Fatalf("orderer with auto-merge: %d %v", code, out)
+	}
+	td := out["spec"].(map[string]any)["teardown"].(map[string]any)
+	if td["attempt"] != float64(1) || td["requestedBy"] != "user:default/alice" || td["reason"] != "done" ||
+		td["autoMerge"].(map[string]any)["rule"] != "personas" {
+		t.Errorf("spec.teardown %v", td)
+	}
+	if code, out := teardown(carol, nil); code != 409 || !strings.Contains(out["error"].(string), "running") {
+		t.Errorf("while running: %d %v", code, out)
+	}
+
+	// Withdrawn: a teammate asks again, a human merges.
+	setStatus(func(o *v1alpha1.Order) {
+		o.Status.Teardown = &v1alpha1.TeardownStatus{Attempt: 1, Outcome: v1alpha1.TeardownWithdrawn}
+	})
+	code, out = teardown(carol, nil)
+	if code != 202 {
+		t.Fatalf("again: %d %v", code, out)
+	}
+	td = out["spec"].(map[string]any)["teardown"].(map[string]any)
+	if td["attempt"] != float64(2) || td["requestedBy"] != "user:default/carol" || td["autoMerge"] != nil {
+		t.Errorf("second spec.teardown %v", td)
+	}
+
+	setStatus(func(o *v1alpha1.Order) {
+		o.Status.Phase = v1alpha1.PhaseDeleted
+		o.Status.Teardown = &v1alpha1.TeardownStatus{Attempt: 2, Outcome: v1alpha1.TeardownDeleted}
+	})
+	if code, out := teardown(alice, nil); code != 409 || !strings.Contains(out["error"].(string), "torn down already") {
+		t.Errorf("after the teardown: %d %v", code, out)
+	}
+}

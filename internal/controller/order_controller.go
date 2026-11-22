@@ -5,6 +5,11 @@
 //	                     └→ Cancelled (cancel, or the PR closed unmerged)
 //	Failed: the order cannot go on as it is (bad parameters, a taken name)
 //
+// A teardown (spec.teardown, docs/adr/0003-teardown.md) opens a
+// delete-claim pull request; the fleet repo deletes the XR after its merge:
+//
+//	Merged…Ready|Deleted → TeardownPROpen → TearingDown → Deleted
+//
 // The controller never applies anything to a management cluster. Its only
 // write path is git; Flux brings the files onto the cluster. Deleting an
 // Order never tears anything down: before the merge its pull request is
@@ -46,6 +51,10 @@ const (
 	// ConditionAutoMerge: where the service's own merge of the PR stands
 	// (orders with spec.autoMerge only).
 	ConditionAutoMerge = "AutoMerge"
+	// ConditionTeardown: where the teardown stands (spec.teardown).
+	ConditionTeardown = "Teardown"
+	// ConditionTeardownAutoMerge: the service's own merge of the teardown PR.
+	ConditionTeardownAutoMerge = "TeardownAutoMerge"
 )
 
 // AutoMergeSettle is how long an auto-merge order waits for checks to show
@@ -141,7 +150,17 @@ func (r *OrderReconciler) finalize(ctx context.Context, o *v1alpha1.Order) error
 	if !controllerutil.ContainsFinalizer(o, v1alpha1.Finalizer) {
 		return nil
 	}
-	if d := o.Status.Delivery; d != nil && d.PullRequest != nil && o.Status.Phase == v1alpha1.PhasePROpen {
+	var d *v1alpha1.DeliveryStatus
+	switch o.Status.Phase {
+	case v1alpha1.PhasePROpen:
+		d = o.Status.Delivery
+	case v1alpha1.PhaseTeardownPROpen:
+		// An open teardown nobody follows any more is closed, not merged.
+		if o.Status.Teardown != nil {
+			d = o.Status.Teardown.Delivery
+		}
+	}
+	if d != nil && d.PullRequest != nil {
 		if err := r.Git.Close(ctx, d.Repository, d.PullRequest.Number, d.Branch); err != nil {
 			return fmt.Errorf("closing the pull request of the deleted order: %w", err)
 		}
@@ -162,7 +181,7 @@ func (r *OrderReconciler) step(ctx context.Context, o *v1alpha1.Order) (ctrl.Res
 		return ctrl.Result{}, nil
 	}
 	if o.Spec.Cancel && !o.Status.Phase.BeforeMerge() {
-		o.Status.Message = "cancel refused: the order is merged; removing it needs a teardown"
+		o.Status.Message = "cancel refused: the order is merged; tear it down instead"
 	}
 
 	for {
@@ -210,10 +229,27 @@ func (r *OrderReconciler) advance(ctx context.Context, o *v1alpha1.Order) (ctrl.
 		return r.followPR(ctx, o)
 
 	case v1alpha1.PhaseMerged:
+		if o.TeardownPending() {
+			return r.startTeardown(ctx, o)
+		}
 		return r.followApply(ctx, o)
 
 	case v1alpha1.PhaseApplied, v1alpha1.PhaseBuilding, v1alpha1.PhaseReady, v1alpha1.PhaseDeleted:
+		if o.TornDown() {
+			// Final: a new order of the same name must not be taken for
+			// this one.
+			return ctrl.Result{}, nil
+		}
+		if o.TeardownPending() {
+			return r.startTeardown(ctx, o)
+		}
 		return r.followLive(ctx, o)
+
+	case v1alpha1.PhaseTeardownPROpen:
+		return r.followTeardownPR(ctx, o)
+
+	case v1alpha1.PhaseTearingDown:
+		return r.followTeardown(ctx, o)
 	}
 	return ctrl.Result{}, nil
 }
@@ -326,40 +362,72 @@ func (r *OrderReconciler) followPR(ctx context.Context, o *v1alpha1.Order) (ctrl
 	switch pr.State {
 	case "merged":
 		d.MergeSHA = pr.MergeSHA
+		r.deleteBranch(ctx, d)
 		SetPhase(o, v1alpha1.PhaseMerged, "merged as "+short(pr.MergeSHA))
 		return ctrl.Result{}, nil
 	case "closed":
+		r.deleteBranch(ctx, d)
 		SetPhase(o, v1alpha1.PhaseCancelled, "pull request closed without a merge")
 		return ctrl.Result{}, nil
 	}
 	if o.Spec.AutoMerge != nil {
-		return r.autoMerge(ctx, o, pr)
+		return r.autoMerge(ctx, o, pr, mergeJob{
+			d: d, rule: o.Spec.AutoMerge.Rule, action: v1alpha1.ActionOrder,
+			condition: ConditionAutoMerge, opened: v1alpha1.PhasePROpen, what: "pull request",
+		})
 	}
 	return ctrl.Result{RequeueAfter: r.PRPoll}, nil
+}
+
+// deleteBranch removes the branch of a merged or closed pull request, so the
+// name can be ordered again (#20). Best effort: a branch left behind is
+// healed by the next Open of the same name.
+func (r *OrderReconciler) deleteBranch(ctx context.Context, d *v1alpha1.DeliveryStatus) {
+	if err := r.Git.DeleteBranch(ctx, d.Repository, d.Branch); err != nil {
+		log.FromContext(ctx).Info("branch not deleted", "branch", d.Branch, "error", err.Error())
+	}
+}
+
+// mergeJob is one pull request the service may merge itself: the order's or
+// its teardown's.
+type mergeJob struct {
+	d         *v1alpha1.DeliveryStatus
+	rule      string
+	action    v1alpha1.AutoMergeAction
+	condition string
+	// opened is the phase the PR opened in (the checks' settle time).
+	opened v1alpha1.Phase
+	// what names the PR in status.message.
+	what string
 }
 
 // autoMerge merges an open PR of an order that asked for it, once its
 // checks pass and the rule still covers it (docs/adr/0002-auto-merge.md).
 // Anything else leaves the PR to a human; the condition says why.
-func (r *OrderReconciler) autoMerge(ctx context.Context, o *v1alpha1.Order, pr *delivery.PRState) (ctrl.Result, error) {
-	d := o.Status.Delivery
+func (r *OrderReconciler) autoMerge(ctx context.Context, o *v1alpha1.Order, pr *delivery.PRState, job mergeJob) (ctrl.Result, error) {
+	d := job.d
 	wait := ctrl.Result{RequeueAfter: r.PRPoll}
 	// set records the state in the condition and, for API clients that only
 	// read the message (claims orders get/watch), in status.message.
 	set := func(status metav1.ConditionStatus, reason, msg string) {
 		meta.SetStatusCondition(&o.Status.Conditions, metav1.Condition{
-			Type: ConditionAutoMerge, Status: status, Reason: reason, Message: msg, ObservedGeneration: o.Generation,
+			Type: job.condition, Status: status, Reason: reason, Message: msg, ObservedGeneration: o.Generation,
 		})
 	}
-	note := func(msg string) { o.Status.Message = "pull request " + d.PullRequest.URL + "; auto-merge: " + msg }
+	note := func(msg string) { o.Status.Message = job.what + " " + d.PullRequest.URL + "; auto-merge: " + msg }
 	mc, err := r.cluster(ctx, o.Spec.Placement.ManagementCluster)
 	if err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
-	rule := automerge.Rule(mc.Spec.AutoMerge, o.Spec.AutoMerge.Rule)
+	rule := automerge.Rule(mc.Spec.AutoMerge, job.rule)
 	if rule == nil {
-		set(metav1.ConditionFalse, "RuleGone", fmt.Sprintf("rule %s is no longer on ManagementCluster %s; a human merges", o.Spec.AutoMerge.Rule, mc.Name))
-		note(fmt.Sprintf("stopped, rule %s is gone; a human merges", o.Spec.AutoMerge.Rule))
+		set(metav1.ConditionFalse, "RuleGone", fmt.Sprintf("rule %s is no longer on ManagementCluster %s; a human merges", job.rule, mc.Name))
+		note(fmt.Sprintf("stopped, rule %s is gone; a human merges", job.rule))
+		return wait, nil
+	}
+	if !automerge.AllowsAction(*rule, job.action) {
+		set(metav1.ConditionFalse, "RuleGone", fmt.Sprintf("rule %s no longer allows %ss; a human merges", rule.Name, job.action))
+		note(fmt.Sprintf("stopped, rule %s no longer allows %ss; a human merges", rule.Name, job.action))
 		return wait, nil
 	}
 	if ok, why := automerge.Covers(*rule, o.Spec.Template, automerge.Params(o.EffectiveRendered())); !ok {
@@ -382,7 +450,7 @@ func (r *OrderReconciler) autoMerge(ctx context.Context, o *v1alpha1.Order, pr *
 		set(metav1.ConditionUnknown, "Waiting", "waiting for checks: "+strings.Join(checks.Pending, ", "))
 		note("waiting for checks: " + strings.Join(checks.Pending, ", "))
 		return wait, nil
-	case checks.Total == 0 && time.Since(r.prOpenedAt(o)) < r.settle():
+	case checks.Total == 0 && time.Since(r.prOpenedAt(o, job.opened)) < r.settle():
 		set(metav1.ConditionUnknown, "Waiting", "waiting for checks to show up")
 		note("waiting for checks to show up")
 		return wait, nil
@@ -425,10 +493,10 @@ func (r *OrderReconciler) settle() time.Duration {
 	return AutoMergeSettle
 }
 
-// prOpenedAt is when the order reached PROpen.
-func (r *OrderReconciler) prOpenedAt(o *v1alpha1.Order) time.Time {
+// prOpenedAt is when the order last reached phase p.
+func (r *OrderReconciler) prOpenedAt(o *v1alpha1.Order, p v1alpha1.Phase) time.Time {
 	for i := len(o.Status.History) - 1; i >= 0; i-- {
-		if o.Status.History[i].Phase == v1alpha1.PhasePROpen {
+		if o.Status.History[i].Phase == p {
 			return o.Status.History[i].Time.Time
 		}
 	}

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -35,6 +36,7 @@ type PR struct {
 	State    string // open, closed
 	Merged   bool
 	MergeSHA string
+	Labels   []string
 }
 
 // Server is the fake. Owner/Repo is the only repository it serves.
@@ -177,6 +179,14 @@ func (s *Server) merge(n int) string {
 	for k, v := range s.trees[head.Tree] {
 		files[k] = v
 	}
+	// What the head removed against its parent goes from the base too.
+	if len(head.Parents) > 0 {
+		for k := range s.trees[s.commits[head.Parents[0]].Tree] {
+			if _, ok := s.trees[head.Tree][k]; !ok {
+				delete(files, k)
+			}
+		}
+	}
 	sha := s.putCommit(s.putTree(files), []string{base, pr.HeadSHA}, "Merge pull request #"+strconv.Itoa(n))
 	s.refs["heads/"+pr.Base] = sha
 	pr.State, pr.Merged, pr.MergeSHA = "closed", true, sha
@@ -203,9 +213,17 @@ func (s *Server) pull(n int) *PR {
 }
 
 func (s *Server) prJSON(p *PR) map[string]any {
+	var mergedAt any
+	if p.Merged {
+		mergedAt = "2026-11-22T10:00:00Z"
+	}
+	labels := []map[string]any{}
+	for _, l := range p.Labels {
+		labels = append(labels, map[string]any{"name": l})
+	}
 	return map[string]any{
 		"number": p.Number, "title": p.Title, "body": p.Body, "state": p.State,
-		"merged": p.Merged, "merge_commit_sha": p.MergeSHA,
+		"merged": p.Merged, "merge_commit_sha": p.MergeSHA, "merged_at": mergedAt, "labels": labels,
 		"html_url": fmt.Sprintf("https://github.com/%s/%s/pull/%d", s.Owner, s.Repo, p.Number),
 		"head":     map[string]any{"ref": p.Head, "sha": p.HeadSHA},
 		"base":     map[string]any{"ref": p.Base},
@@ -427,6 +445,29 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 200, map[string]any{"sha": sha, "merged": true})
 		}
 
+	case r.Method == http.MethodPost && strings.HasPrefix(rest, "issues/") && strings.HasSuffix(rest, "/labels"):
+		n, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(rest, "issues/"), "/labels"))
+		pr := s.pull(n)
+		if err != nil || pr == nil {
+			notFound(w)
+			return
+		}
+		// go-github sends a bare array; the API also takes {"labels": [...]}.
+		var raw json.RawMessage
+		_ = json.NewDecoder(r.Body).Decode(&raw)
+		var labels []string
+		if json.Unmarshal(raw, &labels) != nil {
+			var in struct{ Labels []string }
+			_ = json.Unmarshal(raw, &in)
+			labels = in.Labels
+		}
+		for _, l := range labels {
+			if !slices.Contains(pr.Labels, l) {
+				pr.Labels = append(pr.Labels, l)
+			}
+		}
+		writeJSON(w, 200, []any{})
+
 	case strings.HasPrefix(rest, "pulls/"):
 		n, err := strconv.Atoi(strings.TrimPrefix(rest, "pulls/"))
 		pr := s.pull(n)
@@ -467,6 +508,46 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	default:
 		notFound(w)
 	}
+}
+
+// Branches returns the branch names.
+func (s *Server) Branches() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []string
+	for ref := range s.refs {
+		if b, ok := strings.CutPrefix(ref, "heads/"); ok {
+			out = append(out, b)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Commit adds a commit with files changed (nil content deletes) on top of
+// branch, creating the branch from main when it does not exist, and returns
+// its SHA.
+func (s *Server) Commit(branch, message string, files map[string]*string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	parent, ok := s.refs["heads/"+branch]
+	if !ok {
+		parent = s.refs["heads/main"]
+	}
+	tree := map[string]string{}
+	for k, v := range s.trees[s.commits[parent].Tree] {
+		tree[k] = v
+	}
+	for k, v := range files {
+		if v == nil {
+			delete(tree, k)
+		} else {
+			tree[k] = *v
+		}
+	}
+	sha := s.putCommit(s.putTree(tree), []string{parent}, message)
+	s.refs["heads/"+branch] = sha
+	return sha
 }
 
 // ClosePR closes pull request n without merging, as a reviewer would.

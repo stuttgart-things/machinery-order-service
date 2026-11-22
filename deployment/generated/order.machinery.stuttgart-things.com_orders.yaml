@@ -62,8 +62,9 @@ spec:
           metadata:
             type: object
           spec:
-            description: OrderSpec is what was ordered. Only Cancel changes after
-              the intake.
+            description: |-
+              OrderSpec is what was ordered. Only Cancel and Teardown change after the
+              intake.
             properties:
               autoMerge:
                 description: |-
@@ -83,7 +84,7 @@ spec:
                 description: |-
                   Cancel asks to withdraw the order. Before the merge the pull request is
                   closed and the order ends Cancelled; after the merge it is refused
-                  (that needs a teardown, which comes later).
+                  (spec.teardown removes a merged order, docs/adr/0003-teardown.md).
                 type: boolean
               delivery:
                 default: pullRequest
@@ -161,6 +162,44 @@ spec:
                 description: RequestedBy is the orderer (user:default/<name>), taken
                   from the token.
                 type: string
+              teardown:
+                description: |-
+                  Teardown asks to remove what the order built, through a delete-claim
+                  pull request (docs/adr/0003-teardown.md). Set by
+                  POST /api/v1/orders/{id}/teardown; a new request raises Attempt.
+                properties:
+                  attempt:
+                    description: |-
+                      Attempt numbers the requests; status.teardown.attempt says which one
+                      the status is about.
+                    minimum: 1
+                    type: integer
+                  autoMerge:
+                    description: |-
+                      AutoMerge names the rule that allowed the service to merge the
+                      teardown pull request itself. Unset: a human merges.
+                    properties:
+                      rule:
+                        description: Rule is the name of the ManagementCluster's auto-merge
+                          rule.
+                        minLength: 1
+                        type: string
+                    required:
+                    - rule
+                    type: object
+                  reason:
+                    description: Reason is shown in the pull request body.
+                    maxLength: 500
+                    type: string
+                  requestedAt:
+                    format: date-time
+                    type: string
+                  requestedBy:
+                    description: RequestedBy is who asked (user:default/<name>).
+                    type: string
+                required:
+                - attempt
+                type: object
               template:
                 description: Template is the claim-machinery-api ClaimTemplate to
                   render.
@@ -319,6 +358,8 @@ spec:
                       - Applied
                       - Building
                       - Ready
+                      - TeardownPROpen
+                      - TearingDown
                       - Deleted
                       - Cancelled
                       - Failed
@@ -382,6 +423,8 @@ spec:
                 - Applied
                 - Building
                 - Ready
+                - TeardownPROpen
+                - TearingDown
                 - Deleted
                 - Cancelled
                 - Failed
@@ -437,6 +480,85 @@ spec:
                 required:
                 - files
                 - renderedAt
+                type: object
+              teardown:
+                description: Teardown is the teardown's progress (spec.teardown).
+                properties:
+                  attempt:
+                    description: Attempt is the spec.teardown.attempt this status
+                      is about.
+                    type: integer
+                  delivery:
+                    description: Delivery is the teardown's pull request.
+                    properties:
+                      baseBranch:
+                        type: string
+                      branch:
+                        type: string
+                      commitSHA:
+                        description: CommitSHA is the commit on Branch with the order's
+                          files.
+                        type: string
+                      kustomizations:
+                        description: Kustomizations are the kustomization.yaml files
+                          the order appended to.
+                        items:
+                          type: string
+                        type: array
+                      mergeSHA:
+                        description: MergeSHA is the commit on the base branch that
+                          brought the files in.
+                        type: string
+                      pullRequest:
+                        description: PullRequest is the pull request that delivers
+                          the order.
+                        properties:
+                          number:
+                            type: integer
+                          state:
+                            description: State is open, closed or merged.
+                            type: string
+                          url:
+                            type: string
+                        required:
+                        - number
+                        - state
+                        - url
+                        type: object
+                      repository:
+                        description: Repository is owner/name.
+                        type: string
+                    type: object
+                  fromPhase:
+                    description: |-
+                      FromPhase is the phase the order was in when the teardown started; a
+                      withdrawn teardown goes back to it.
+                    enum:
+                    - Ordered
+                    - Placed
+                    - PROpen
+                    - Merged
+                    - Applied
+                    - Building
+                    - Ready
+                    - TeardownPROpen
+                    - TearingDown
+                    - Deleted
+                    - Cancelled
+                    - Failed
+                    type: string
+                  outcome:
+                    description: |-
+                      Outcome is empty while the teardown runs, Withdrawn when its pull
+                      request was closed unmerged, Failed when it could not be delivered,
+                      Deleted once the XR is gone.
+                    enum:
+                    - Withdrawn
+                    - Failed
+                    - Deleted
+                    type: string
+                required:
+                - attempt
                 type: object
               xrRef:
                 description: ObjectRef names the XR the order creates.

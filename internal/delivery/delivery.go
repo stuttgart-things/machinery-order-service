@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"regexp"
 	"strings"
 
 	"github.com/google/go-github/v84/github"
@@ -25,10 +26,13 @@ import (
 // TrailerKey is the commit trailer naming the order.
 const TrailerKey = "Order-Id"
 
-// File is one file of an order.
+// File is one file of an order. Delete removes it instead (a teardown):
+// Content is ignored, and its entry in a kustomization.yaml next to it goes
+// as well.
 type File struct {
 	Path    string
 	Content string
+	Delete  bool
 }
 
 // Request is one order to deliver as a pull request.
@@ -41,6 +45,8 @@ type Request struct {
 	Body       string
 	OrderID    string
 	Files      []File
+	// Labels are added to the pull request.
+	Labels []string
 }
 
 // Result is what Open did.
@@ -65,6 +71,8 @@ type Deliverer interface {
 	Open(ctx context.Context, r Request) (*Result, error)
 	PullRequest(ctx context.Context, repository string, number int) (*PRState, error)
 	Close(ctx context.Context, repository string, number int, branch string) error
+	// DeleteBranch deletes a branch; a branch that is gone already is fine.
+	DeleteBranch(ctx context.Context, repository, branch string) error
 	// Contains reports whether commit sha is head or one of its ancestors.
 	Contains(ctx context.Context, repository, sha, head string) (bool, error)
 	Checks(ctx context.Context, repository, sha string) (*Checks, error)
@@ -179,7 +187,15 @@ func (g *GitHub) Open(ctx context.Context, r Request) (*Result, error) {
 		if err != nil {
 			return nil, err
 		}
+		if ours && pr.GetState() == "closed" && pr.MergedAt == nil {
+			// An earlier attempt, closed unmerged (a withdrawn teardown):
+			// not this delivery.
+			continue
+		}
 		if ours {
+			if err := g.label(ctx, owner, repo, pr.GetNumber(), r.Labels); err != nil {
+				return nil, err
+			}
 			return &Result{CommitSHA: pr.GetHead().GetSHA(), PRNumber: pr.GetNumber(), PRURL: pr.GetHTMLURL()}, nil
 		}
 		if pr.GetState() == "open" {
@@ -187,26 +203,37 @@ func (g *GitHub) Open(ctx context.Context, r Request) (*Result, error) {
 		}
 	}
 
-	// 2. The branch exists: ours (a retry after the push) or taken.
+	// 2. The branch exists: ours (a retry after the push), a leftover of a
+	// merged order (#20), or taken.
 	res := &Result{}
-	ref, resp, err := g.Client.Git.GetRef(ctx, owner, repo, "heads/"+r.Branch)
-	switch {
-	case err == nil:
-		sha := ref.GetObject().GetSHA()
+	sha, err := g.branchHead(ctx, owner, repo, r.Branch)
+	if err != nil {
+		return nil, err
+	}
+	if sha != "" {
 		ours, err := g.commitIsOurs(ctx, owner, repo, sha, r.OrderID)
 		if err != nil {
 			return nil, err
 		}
-		if !ours {
-			return nil, &ConflictError{Msg: fmt.Sprintf("branch %s exists already and is not this order's", r.Branch)}
+		if ours {
+			res.CommitSHA = sha
+		} else {
+			stale, err := g.stale(ctx, r, sha)
+			if err != nil {
+				return nil, err
+			}
+			if !stale {
+				return nil, &ConflictError{Msg: fmt.Sprintf("branch %s exists already and is not this order's, with commits not on %s", r.Branch, r.BaseBranch)}
+			}
+			if err := g.DeleteBranch(ctx, r.Repository, r.Branch); err != nil {
+				return nil, err
+			}
 		}
-		res.CommitSHA = sha
-	case notFound(resp, err):
+	}
+	if res.CommitSHA == "" {
 		if err := g.commit(ctx, owner, repo, r, res); err != nil {
 			return nil, err
 		}
-	default:
-		return nil, fmt.Errorf("reading branch %s: %w", r.Branch, err)
 	}
 
 	// 3. The pull request.
@@ -220,7 +247,47 @@ func (g *GitHub) Open(ctx context.Context, r Request) (*Result, error) {
 		return nil, fmt.Errorf("opening the pull request: %w", err)
 	}
 	res.PRNumber, res.PRURL = pr.GetNumber(), pr.GetHTMLURL()
+	if err := g.label(ctx, owner, repo, res.PRNumber, r.Labels); err != nil {
+		return nil, err
+	}
 	return res, nil
+}
+
+// branchHead is the SHA branch points to, "" when there is no such branch.
+func (g *GitHub) branchHead(ctx context.Context, owner, repo, branch string) (string, error) {
+	ref, resp, err := g.Client.Git.GetRef(ctx, owner, repo, "heads/"+branch)
+	if notFound(resp, err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("reading branch %s: %w", branch, err)
+	}
+	return ref.GetObject().GetSHA(), nil
+}
+
+// stale reports whether a branch that is not the order's is a leftover:
+// step 1 found no open pull request on it, and its head is on the base
+// branch, so deleting it loses nothing (#20).
+func (g *GitHub) stale(ctx context.Context, r Request, head string) (bool, error) {
+	owner, repo, err := split(r.Repository)
+	if err != nil {
+		return false, err
+	}
+	base, _, err := g.Client.Git.GetRef(ctx, owner, repo, "heads/"+r.BaseBranch)
+	if err != nil {
+		return false, fmt.Errorf("reading %s: %w", r.BaseBranch, err)
+	}
+	return g.Contains(ctx, r.Repository, head, base.GetObject().GetSHA())
+}
+
+func (g *GitHub) label(ctx context.Context, owner, repo string, number int, labels []string) error {
+	if len(labels) == 0 {
+		return nil
+	}
+	if _, _, err := g.Client.Issues.AddLabelsToIssue(ctx, owner, repo, number, labels); err != nil {
+		return fmt.Errorf("labelling pull request #%d: %w", number, err)
+	}
+	return nil
 }
 
 // commit builds the order's commit on top of the base branch and creates the
@@ -237,6 +304,7 @@ func (g *GitHub) commit(ctx context.Context, owner, repo string, r Request, res 
 	}
 
 	var entries []*github.TreeEntry
+	var files []File
 	for _, f := range r.Files {
 		if err := layout.ValidatePath(f.Path); err != nil {
 			return &ConflictError{Msg: err.Error()}
@@ -245,16 +313,27 @@ func (g *GitHub) commit(ctx context.Context, owner, repo string, r Request, res 
 		if err != nil {
 			return err
 		}
-		if exists {
+		switch {
+		case f.Delete && !exists:
+			continue // gone already
+		case f.Delete:
+			entries = append(entries, &github.TreeEntry{Path: github.Ptr(f.Path), Mode: github.Ptr("100644"), Type: github.Ptr("blob")})
+		case exists:
 			return &ConflictError{Msg: fmt.Sprintf("%s exists already on %s: the name is taken", f.Path, r.BaseBranch)}
+		default:
+			entries = append(entries, blob(f.Path, f.Content))
 		}
-		entries = append(entries, blob(f.Path, f.Content))
+		files = append(files, f)
+	}
+	if len(files) == 0 {
+		return &ConflictError{Msg: fmt.Sprintf("nothing to remove: none of the files is on %s any more", r.BaseBranch)}
 	}
 
-	// The kustomization next to each file gets its entry, as in create-vm.
-	kustomizations := map[string]string{}
+	// The kustomization next to each file gets its entry, as in create-vm,
+	// or loses it for a deleted file.
+	kustomizations, originals := map[string]string{}, map[string]string{}
 	var order []string
-	for _, f := range r.Files {
+	for _, f := range files {
 		dir := path.Dir(f.Path)
 		for _, n := range layout.KustomizationNames {
 			kp := path.Join(dir, n)
@@ -268,10 +347,13 @@ func (g *GitHub) commit(ctx context.Context, owner, repo string, r Request, res 
 				if !exists {
 					continue
 				}
+				originals[kp] = raw
 				order = append(order, kp)
 			}
-			after, _, err := layout.AppendEntry(kp, raw, path.Base(f.Path))
-			if err != nil {
+			after := raw
+			if f.Delete {
+				after = removeEntry(raw, path.Base(f.Path))
+			} else if after, _, err = layout.AppendEntry(kp, raw, path.Base(f.Path)); err != nil {
 				return &ConflictError{Msg: err.Error()}
 			}
 			kustomizations[kp] = after
@@ -279,6 +361,9 @@ func (g *GitHub) commit(ctx context.Context, owner, repo string, r Request, res 
 		}
 	}
 	for _, kp := range order {
+		if kustomizations[kp] == originals[kp] {
+			continue // a deleted file it did not list
+		}
 		entries = append(entries, blob(kp, kustomizations[kp]))
 		res.Kustomizations = append(res.Kustomizations, kp)
 	}
@@ -300,6 +385,20 @@ func (g *GitHub) commit(ctx context.Context, owner, repo string, r Request, res 
 	}
 	res.CommitSHA = commit.GetSHA()
 	return nil
+}
+
+// removeEntry drops the resources entry for filename from a kustomization,
+// as hack/claim-deletion.py does in the fleet repo.
+func removeEntry(raw, filename string) string {
+	re := regexp.MustCompile(`^\s*-\s+(\./)?` + regexp.QuoteMeta(filename) + `\s*(#.*)?$`)
+	lines := strings.Split(raw, "\n")
+	out := lines[:0]
+	for _, l := range lines {
+		if !re.MatchString(l) {
+			out = append(out, l)
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 func blob(p, content string) *github.TreeEntry {
@@ -357,11 +456,21 @@ func (g *GitHub) Close(ctx context.Context, repository string, number int, branc
 			return fmt.Errorf("closing pull request #%d: %w", number, err)
 		}
 	}
-	if branch != "" {
-		resp, err := g.Client.Git.DeleteRef(ctx, owner, repo, "heads/"+branch)
-		if err != nil && !notFound(resp, err) && (resp == nil || resp.StatusCode != http.StatusUnprocessableEntity) {
-			return fmt.Errorf("deleting branch %s: %w", branch, err)
-		}
+	return g.DeleteBranch(ctx, repository, branch)
+}
+
+// DeleteBranch deletes branch; 404 and 422 (gone already) are fine.
+func (g *GitHub) DeleteBranch(ctx context.Context, repository, branch string) error {
+	if branch == "" {
+		return nil
+	}
+	owner, repo, err := split(repository)
+	if err != nil {
+		return err
+	}
+	resp, err := g.Client.Git.DeleteRef(ctx, owner, repo, "heads/"+branch)
+	if err != nil && !notFound(resp, err) && (resp == nil || resp.StatusCode != http.StatusUnprocessableEntity) {
+		return fmt.Errorf("deleting branch %s: %w", branch, err)
 	}
 	return nil
 }

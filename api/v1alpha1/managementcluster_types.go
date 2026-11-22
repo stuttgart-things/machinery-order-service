@@ -115,7 +115,22 @@ type AutoMergeRule struct {
 	// listed parameter must have one of the values.
 	// +optional
 	Parameters map[string][]string `json:"parameters,omitempty"`
+	// Actions the rule allows: order (the order's own pull request) and
+	// teardown (its delete-claim pull request, docs/adr/0003-teardown.md).
+	// Empty = [order].
+	// +optional
+	// +listType=set
+	Actions []AutoMergeAction `json:"actions,omitempty"`
 }
+
+// AutoMergeAction is what a rule lets the service merge.
+// +kubebuilder:validation:Enum=order;teardown
+type AutoMergeAction string
+
+const (
+	ActionOrder    AutoMergeAction = "order"
+	ActionTeardown AutoMergeAction = "teardown"
+)
 
 // ManagementClusterSpec describes a cluster that applies orders: Flux pulls
 // its orders directory, Crossplane builds the XRs.

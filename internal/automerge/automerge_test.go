@@ -30,7 +30,7 @@ func TestFind(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			r, why := Find(am, c.by, c.groups, c.tmpl, c.params)
+			r, why := Find(am, v1alpha1.ActionOrder, c.by, c.groups, c.tmpl, c.params)
 			got := ""
 			if r != nil {
 				got = r.Name
@@ -43,10 +43,31 @@ func TestFind(t *testing.T) {
 			}
 		})
 	}
-	if r, why := Find(nil, "user:default/alice", nil, "vm", nil); r != nil || !strings.Contains(why, "no auto-merge rules") {
+	if r, why := Find(nil, v1alpha1.ActionOrder, "user:default/alice", nil, "vm", nil); r != nil || !strings.Contains(why, "no auto-merge rules") {
 		t.Fatalf("no rules: %v %q", r, why)
 	}
 	if Method(nil) != "merge" || Method(&v1alpha1.AutoMerge{Method: "squash"}) != "squash" {
 		t.Fatal("method")
+	}
+}
+
+func TestFindTeardown(t *testing.T) {
+	am := &v1alpha1.AutoMerge{Rules: []v1alpha1.AutoMergeRule{
+		{Name: "orders-only", Groups: []string{"group:default/ai-personas"}},
+		{Name: "both", Users: []string{"user:default/alice"}, Actions: []v1alpha1.AutoMergeAction{v1alpha1.ActionOrder, v1alpha1.ActionTeardown}},
+		{Name: "teardown-only", Users: []string{"user:default/bob"}, Actions: []v1alpha1.AutoMergeAction{v1alpha1.ActionTeardown}},
+	}}
+	personas := []string{"group:default/ai-personas"}
+	if r, why := Find(am, v1alpha1.ActionTeardown, "user:default/p", personas, "vm", nil); r != nil || !strings.Contains(why, "orders-only: not for teardowns") {
+		t.Fatalf("a rule without actions allowed a teardown: %v %q", r, why)
+	}
+	if r, _ := Find(am, v1alpha1.ActionOrder, "user:default/p", personas, "vm", nil); r == nil || r.Name != "orders-only" {
+		t.Fatalf("order: %v", r)
+	}
+	if r, _ := Find(am, v1alpha1.ActionTeardown, "user:default/alice", nil, "vm", nil); r == nil || r.Name != "both" {
+		t.Fatalf("teardown alice: %v", r)
+	}
+	if r, _ := Find(am, v1alpha1.ActionOrder, "user:default/bob", nil, "vm", nil); r != nil {
+		t.Fatalf("a teardown-only rule allowed an order: %v", r)
 	}
 }
