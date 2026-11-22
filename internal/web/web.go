@@ -3,6 +3,9 @@
 // through the API (claims, Backstage).
 //
 //	ui/                 My orders: phase, cluster, PR, live status; SSE updates
+//	ui/?scope=all       All I may see (ADR 0001: admins every order, others
+//	                    their own and their teams'), with orderer and group;
+//	                    &group= keeps one group, &sort=group groups the rows
 //	ui/orders/{id}      Order detail: timeline, files, PR/commit, order ID, Cancel, Tear down
 //	ui/manifest.json    sthings-portal manifest (no login)
 //	ui/fragment/orders  portal overview fragment: my orders by state, newest
@@ -22,6 +25,7 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"slices"
 	"sort"
 	"strings"
@@ -103,9 +107,105 @@ func (c *captured) Header() http.Header         { return c.header }
 func (c *captured) Write(b []byte) (int, error) { return len(b), nil }
 func (c *captured) WriteHeader(s int)           { c.status = s }
 
-// filter is "my orders": the caller's with auth, every order without.
-func filter(c *api.Caller) api.Filter {
-	return api.Filter{RequestedBy: c.Ref}
+// view is what the list shows: "my orders" (the default) or everything the
+// caller may see (scope=all), optionally one group and sorted by group.
+type view struct {
+	All     bool
+	Group   string
+	ByGroup bool
+	Admin   bool
+	// Groups are the groups of the visible orders, for the group filter.
+	Groups []string
+	// Query repeats the view for ui/events and ui/rows.
+	Query string
+}
+
+func (u *UI) viewOf(r *http.Request, c *api.Caller) view {
+	q := r.URL.Query()
+	v := view{All: q.Get("scope") == "all", Admin: u.API.IsAdmin(c)}
+	if v.All {
+		v.Group = q.Get("group")
+		v.ByGroup = q.Get("sort") == "group"
+	}
+	qs := url.Values{}
+	if v.All {
+		qs.Set("scope", "all")
+		if v.Group != "" {
+			qs.Set("group", v.Group)
+		}
+		if v.ByGroup {
+			qs.Set("sort", "group")
+		}
+	}
+	v.Query = qs.Encode()
+	return v
+}
+
+// filter is the view's filter. "My orders" are the caller's with auth and
+// every order without; scope=all is what the caller may see.
+func (u *UI) filter(c *api.Caller, v view) api.Filter {
+	if !v.All {
+		return api.Filter{RequestedBy: c.Ref}
+	}
+	return api.Filter{Visible: u.API.VisibleTo(c), Group: v.Group}
+}
+
+// listRow is one table row: the order, and whether the wide (scope=all)
+// columns are shown.
+type listRow struct {
+	api.Row
+	Wide bool
+}
+
+// GroupKey is the row's group label ("" for none).
+func (r listRow) GroupKey() string { return strings.Join(r.Groups, ", ") }
+
+// GroupLabel is GroupKey without the Backstage default namespace.
+func (r listRow) GroupLabel() string {
+	return strings.ReplaceAll(r.GroupKey(), "group:default/", "")
+}
+
+func (u *UI) listRows(r *http.Request, c *api.Caller, v *view) ([]listRow, error) {
+	rows, err := u.API.ListRows(r.Context(), u.filter(c, *v))
+	if err != nil {
+		return nil, err
+	}
+	if v.All {
+		// The group filter offers every group of what the caller may see,
+		// not only of the rows the current filter keeps.
+		all := rows
+		if v.Group != "" {
+			if all, err = u.API.ListRows(r.Context(), u.filter(c, view{All: true})); err != nil {
+				return nil, err
+			}
+		}
+		set := map[string]bool{}
+		for _, a := range all {
+			for _, g := range a.Groups {
+				set[g] = true
+			}
+		}
+		for g := range set {
+			v.Groups = append(v.Groups, g)
+		}
+		sort.Strings(v.Groups)
+	}
+	if v.ByGroup {
+		// Grouped: by group label (orders without a group last), newest
+		// first within a group (rows already come newest first).
+		sort.SliceStable(rows, func(i, j int) bool {
+			a, b := strings.Join(rows[i].Groups, ", "), strings.Join(rows[j].Groups, ", ")
+			if (a == "") != (b == "") {
+				return b == ""
+			}
+			return a < b
+		})
+	}
+	out := make([]listRow, len(rows))
+	for i, row := range rows {
+		out[i] = listRow{Row: row, Wide: v.All}
+	}
+	return out, nil
 }
 
 func (u *UI) list(w http.ResponseWriter, r *http.Request) {
@@ -113,12 +213,13 @@ func (u *UI) list(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	orders, err := u.API.List(r.Context(), filter(c))
+	v := u.viewOf(r, c)
+	rows, err := u.listRows(r, c, &v)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	render(w, listTmpl, map[string]any{"Page": u.page(r, c), "Orders": orders})
+	render(w, listTmpl, map[string]any{"Page": u.page(r, c), "Rows": rows, "View": v})
 }
 
 func (u *UI) rows(w http.ResponseWriter, r *http.Request) {
@@ -126,12 +227,13 @@ func (u *UI) rows(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	orders, err := u.API.List(r.Context(), filter(c))
+	v := u.viewOf(r, c)
+	rows, err := u.listRows(r, c, &v)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	render(w, rowsTmpl, orders)
+	render(w, rowsTmpl, map[string]any{"Rows": rows, "View": v})
 }
 
 // events streams changed rows (list) or a reload signal (detail, ?id=).
@@ -140,7 +242,8 @@ func (u *UI) events(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	f := filter(c)
+	v := u.viewOf(r, c)
+	f := u.filter(c, v)
 	only := r.URL.Query().Get("id")
 	u.API.Stream(w, r, f, "order", func(e api.Event) (string, bool) {
 		if only != "" {
@@ -153,7 +256,7 @@ func (u *UI) events(w http.ResponseWriter, r *http.Request) {
 			return fmt.Sprintf(`<tr id="row-%s" data-deleted="true"></tr>`, template.HTMLEscapeString(e.Order.Name)), true
 		}
 		var buf bytes.Buffer
-		if err := rowTmpl.Execute(&buf, e.Order); err != nil {
+		if err := rowTmpl.Execute(&buf, listRow{Row: api.RowOf(e.Order), Wide: v.All}); err != nil {
 			return "", false
 		}
 		return strings.ReplaceAll(buf.String(), "\n", " "), true
@@ -346,6 +449,16 @@ var funcs = template.FuncMap{
 	"timeline":   timeline,
 	"ago":        ago,
 	"infoKeys":   infoKeys,
+	"join":       strings.Join,
+	// groupNames shows groups without the Backstage default namespace.
+	"groupNames": func(gs []string) string {
+		out := make([]string, len(gs))
+		for i, g := range gs {
+			out[i] = strings.TrimPrefix(g, "group:default/")
+		}
+		return strings.Join(out, ", ")
+	},
+	"groupName": func(g string) string { return strings.TrimPrefix(g, "group:default/") },
 	"short": func(s string) string {
 		if len(s) > 7 {
 			return s[:7]

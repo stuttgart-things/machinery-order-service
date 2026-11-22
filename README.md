@@ -62,6 +62,7 @@ on the base branch.
 | `POST` | `/api/v1/orders/{id}/teardown` | `{"reason", "autoMerge", "resourceVersion"}` → 202. Only merged orders, by whoever may see them; 409 before the merge, while a teardown runs or after one completed; 403 when `autoMerge` is asked by someone other than the orderer or matches no rule with `actions: [teardown]` |
 | `GET` | `/api/v1/management-clusters` | `{"items": [{"name", "lab", "cordoned", "repository", "ordersPath", "autoMerge"}]}`: where orders can go, and who may auto-merge what |
 | `GET` | `/ui/` | **My orders**, live through SSE |
+| `GET` | `/ui/?scope=all` | **All orders** (admins) or **All I may see** (own + the teams', ADR 0001), with orderer and group; `group=<group>` (or `-` for none) keeps one group, `sort=group` groups the rows. Group = the order's `owner`, else the orderer's groups at order time |
 | `GET` | `/ui/orders/{id}` | **Order detail**: timeline, files, PR/commit, order ID, Cancel, Tear down (a human merges) |
 | `GET` | `/ui/manifest.json` | sthings-portal manifest (no login): title `Orders`, one fragment |
 | `GET` | `/ui/fragment/orders` | Portal overview fragment: the caller's orders open/ready/failed and the newest five, linked to their detail |
@@ -95,7 +96,8 @@ Group `order.machinery.stuttgart-things.com/v1alpha1`, CRDs in
 [`config/crd`](config/crd), examples in [`config/samples`](config/samples).
 
 - **Order** (namespaced, name = order ID `ord-<12 hex>`): `template`,
-  `parameters`, `placement.managementCluster`, `requestedBy`, `reason`,
+  `parameters`, `placement.managementCluster`, `requestedBy`,
+  `requestedByGroups` (the orderer's groups at intake, for grouping in the UI), `reason`,
   `cancel`, `rendered` (set by the API at intake), `autoMerge.rule` (set at
   intake when the order asked for auto-merge and a rule allowed it) and
   `teardown.{attempt, requestedBy, requestedAt, reason, autoMerge.rule}` (set

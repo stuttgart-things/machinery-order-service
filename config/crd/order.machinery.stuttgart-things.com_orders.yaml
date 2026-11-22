@@ -162,6 +162,15 @@ spec:
                 description: RequestedBy is the orderer (user:default/<name>), taken
                   from the token.
                 type: string
+              requestedByGroups:
+                description: |-
+                  RequestedByGroups are the orderer's Backstage groups when the order came
+                  in (from the token's roles). The UI groups orders by them when the
+                  order names no owner; visibility does not use them (ADR 0001).
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: set
               teardown:
                 description: |-
                   Teardown asks to remove what the order built, through a delete-claim

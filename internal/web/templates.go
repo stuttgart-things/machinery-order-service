@@ -48,6 +48,12 @@ const styles = `<style>
         button.danger { background: transparent; color: #ef4444; border: 1px solid #ef4444; border-radius: 6px; padding: 0.4rem 1rem; cursor: pointer; }
         .error { color: #ef4444; margin-top: 0.5rem; } .muted { color: var(--hr-muted); }
         .empty { padding: 2rem; text-align: center; color: var(--hr-muted); }
+        .tabs { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+        .tabs a { padding: 0.35rem 0.9rem; border: 1px solid var(--hr-border); border-radius: 9999px; color: var(--hr-muted); font-size: 0.85rem; }
+        .tabs a.active { color: var(--hr-text); border-color: var(--hr-accent); background: var(--hr-surface); }
+        .filters { display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 1rem; font-size: 0.85rem; color: var(--hr-muted); }
+        .filters select { margin-left: 0.4rem; background: var(--hr-card); color: var(--hr-text); border: 1px solid var(--hr-border); border-radius: 6px; padding: 0.2rem 0.4rem; }
+        tr.group th { background: var(--hr-surface); color: var(--hr-text); text-transform: none; letter-spacing: 0; font-size: 0.85rem; }
     </style>`
 
 var errorTmpl = template.Must(template.New("error").Parse(`<!DOCTYPE html>
@@ -55,42 +61,70 @@ var errorTmpl = template.Must(template.New("error").Parse(`<!DOCTYPE html>
 <body style="font-family: system-ui; padding: 2rem"><h1>{{.Status}} {{.Text}}</h1>
 <p>Log in through sthings-portal, or send a bearer token.</p></body></html>`))
 
-const rowDef = `{{define "row"}}<tr id="row-{{.Name}}">
+// rowDef is one order row (a listRow); Wide adds the orderer and the group
+// (scope=all). data-group lets the page place live rows in their group.
+const rowDef = `{{define "row"}}{{$wide := .Wide}}{{$groups := .Groups}}{{$owner := .Owner}}{{with .Order}}<tr id="row-{{.Name}}" data-group="{{join $groups ", "}}">
   <td><a href="ui/orders/{{.Name}}"><code>{{.Name}}</code></a></td>
   <td>{{.Spec.Template}}</td>
   <td>{{.Spec.Placement.ManagementCluster}}</td>
   <td><span class="pill {{phaseClass .Status.Phase}}">{{if .Status.Phase}}{{.Status.Phase}}{{else}}Pending{{end}}</span></td>
   <td>{{with .Status.Delivery}}{{with .PullRequest}}<a href="{{.URL}}" target="_blank" rel="noopener">#{{.Number}}</a> <span class="muted">{{.State}}</span>{{end}}{{end}}</td>
   <td>{{$gone := eq .Status.Phase "Deleted"}}{{with .Status.Live}}{{if .Ready}}<span class="pill ok">Ready</span>{{else if .Found}}<span class="pill busy">building</span>{{else if $gone}}<span class="pill muted">gone</span>{{else}}<span class="muted">not seen</span>{{end}} {{with .Address}}<code>{{.}}</code>{{end}}{{else}}<span class="muted">–</span>{{end}}</td>
+  {{if $wide}}<td>{{with .Spec.RequestedBy}}<code>{{.}}</code>{{else}}<span class="muted">–</span>{{end}}</td>
+  <td>{{if $owner}}<code title="owner {{$owner}}">{{groupName $owner}}</code>{{else if $groups}}<span class="muted" title="no owner: the orderer's groups {{join $groups ", "}}">{{groupNames $groups}}</span>{{else}}<span class="muted">–</span>{{end}}</td>{{end}}
   <td class="muted">{{ago .CreationTimestamp.Time}}</td>
-</tr>{{end}}`
+</tr>{{end}}{{end}}`
+
+// rowsDef is the table body: rows, with a header row per group when sorted
+// by group.
+const rowsDef = `{{define "rows"}}{{$by := .View.ByGroup}}{{$cols := 7}}{{if .View.All}}{{$cols = 9}}{{end}}{{$prev := "\x00"}}{{range .Rows}}{{if $by}}{{$g := .GroupKey}}{{if ne $g $prev}}<tr class="group" data-group-head="{{$g}}"><th colspan="{{$cols}}" title="{{$g}}">{{if $g}}{{.GroupLabel}}{{else}}No group{{end}}</th></tr>{{$prev = $g}}{{end}}{{end}}{{template "row" .}}{{else}}<tr id="empty"><td colspan="{{$cols}}" class="empty">{{if .View.All}}No orders to show.{{else}}No orders yet. Order through the claims CLI or Backstage.{{end}}</td></tr>{{end}}{{end}}`
 
 var rowTmpl = template.Must(template.New("rowonly").Funcs(funcs).Parse(rowDef + `{{template "row" .}}`))
 
-var rowsTmpl = template.Must(template.New("rows").Funcs(funcs).Parse(rowDef + `{{range .}}{{template "row" .}}{{else}}<tr><td colspan="7" class="empty">No orders yet. Order through the claims CLI or Backstage.</td></tr>{{end}}`))
+var rowsTmpl = template.Must(template.New("rowsonly").Funcs(funcs).Parse(rowDef + rowsDef + `{{template "rows" .}}`))
 
-var listTmpl = template.Must(template.New("list").Funcs(funcs).Parse(rowDef + `<!DOCTYPE html>
+var listTmpl = template.Must(template.New("list").Funcs(funcs).Parse(rowDef + rowsDef + `<!DOCTYPE html>
 <html lang="en"><head>
     <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
     ` + pageHead + `
-    <title>My orders · machinery-order-service</title>
+    <title>{{if .View.All}}All orders{{else}}My orders{{end}} · machinery-order-service</title>
     ` + styles + `
 </head><body>
-    <div class="embedded-bar"><span class="embedded-sub">My orders</span><span class="embedded-sub">{{.Page.User}}</span></div>
+    <div class="embedded-bar"><span class="embedded-sub">{{if .View.All}}All orders{{else}}My orders{{end}}</span><span class="embedded-sub">{{.Page.User}}</span></div>
     <div class="container">
         <div class="banner">
-            <h1>My orders</h1>
-            <p class="subtitle">{{if .Page.User}}Orders of <code>{{.Page.User}}</code>{{else}}All orders (no login: auth is off){{end}} · updated live</p>
+            <h1>{{if .View.All}}All orders{{else}}My orders{{end}}</h1>
+            <p class="subtitle">{{if .View.All}}{{if .View.Admin}}Every order (admin){{else}}Yours and your teams' orders{{end}}{{else if .Page.User}}Orders of <code>{{.Page.User}}</code>{{else}}All orders (no login: auth is off){{end}} · updated live</p>
         </div>
+        <nav class="tabs">
+            <a href="ui/"{{if not .View.All}} class="active"{{end}}>My orders</a>
+            <a href="ui/?scope=all"{{if .View.All}} class="active"{{end}}>{{if .View.Admin}}All orders{{else}}All I may see{{end}}</a>
+        </nav>
+        {{if .View.All}}
+        <form class="filters" method="get" action="ui/">
+            <input type="hidden" name="scope" value="all">
+            <label>Group <select name="group" onchange="this.form.submit()">
+                <option value="">All groups</option>
+                {{$sel := .View.Group}}{{range .View.Groups}}<option value="{{.}}"{{if eq . $sel}} selected{{end}}>{{groupName .}}</option>{{end}}
+                <option value="-"{{if eq .View.Group "-"}} selected{{end}}>No group</option>
+            </select></label>
+            <label>Sort <select name="sort" onchange="this.form.submit()">
+                <option value="">Newest first</option>
+                <option value="group"{{if .View.ByGroup}} selected{{end}}>By group</option>
+            </select></label>
+            <noscript><button type="submit">Apply</button></noscript>
+        </form>
+        {{end}}
         <table>
-            <thead><tr><th>Order</th><th>Template</th><th>Cluster</th><th>Phase</th><th>Pull request</th><th>Live</th><th>Age</th></tr></thead>
-            <tbody id="orders">{{range .Orders}}{{template "row" .}}{{else}}<tr id="empty"><td colspan="7" class="empty">No orders yet. Order through the claims CLI or Backstage.</td></tr>{{end}}</tbody>
+            <thead><tr><th>Order</th><th>Template</th><th>Cluster</th><th>Phase</th><th>Pull request</th><th>Live</th>{{if .View.All}}<th>Requested by</th><th>Group</th>{{end}}<th>Age</th></tr></thead>
+            <tbody id="orders" data-by-group="{{.View.ByGroup}}">{{template "rows" .}}</tbody>
         </table>
     </div>
     <script>
     (function () {
         var tbody = document.getElementById('orders');
-        var es = new EventSource('ui/events');
+        var byGroup = tbody.dataset.byGroup === 'true';
+        var es = new EventSource('ui/events{{with .View.Query}}?{{.}}{{end}}');
         es.addEventListener('order', function (ev) {
             var t = document.createElement('tbody');
             t.innerHTML = ev.data;
@@ -100,7 +134,13 @@ var listTmpl = template.Must(template.New("list").Funcs(funcs).Parse(rowDef + `<
             if (row.dataset.deleted) { if (old) old.remove(); return; }
             var empty = document.getElementById('empty');
             if (empty) empty.remove();
-            if (old) old.replaceWith(row); else tbody.prepend(row);
+            if (old) { old.replaceWith(row); return; }
+            if (!byGroup) { tbody.prepend(row); return; }
+            // Grouped: newest first within the group; a new group needs its
+            // header, so the page reloads.
+            var head = Array.prototype.find.call(tbody.querySelectorAll('tr[data-group-head]'),
+                function (h) { return h.dataset.groupHead === row.dataset.group; });
+            if (head) head.after(row); else location.reload();
         });
     })();
     </script>

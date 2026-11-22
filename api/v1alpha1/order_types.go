@@ -108,6 +108,12 @@ type OrderSpec struct {
 	// RequestedBy is the orderer (user:default/<name>), taken from the token.
 	// +optional
 	RequestedBy string `json:"requestedBy,omitempty"`
+	// RequestedByGroups are the orderer's Backstage groups when the order came
+	// in (from the token's roles). The UI groups orders by them when the
+	// order names no owner; visibility does not use them (ADR 0001).
+	// +optional
+	// +listType=set
+	RequestedByGroups []string `json:"requestedByGroups,omitempty"`
 	// Reason is a free-text note from the orderer, shown in the PR body.
 	// +optional
 	// +kubebuilder:validation:MaxLength=500

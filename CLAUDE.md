@@ -44,7 +44,8 @@ API (`apiRunnable`, every replica).
   `List`, `Get`, `Cancel`, `Stream` are shared with the UI.
 - `internal/auth` - copy of claim-machinery-api `internal/auth` (same env
   vars); keep in sync.
-- `internal/web` - UI stage 1, clusterbook style (`pageHead`, `--hr-*`,
+- `internal/web` - UI stage 1 (`ui/` my orders, `ui/?scope=all` everything the
+  caller may see, filter/sort by group via `api.Groups`), clusterbook style (`pageHead`, `--hr-*`,
   relative URLs against `<base href>`), htmx vendored in `static/`.
 - `internal/ghauth` - GitHub App installation token or static token.
 

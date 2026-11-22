@@ -354,6 +354,17 @@ func Owner(o *v1alpha1.Order) string {
 
 // visibleTo is the visibility part of a filter: nil when the caller sees
 // everything (auth off, admin).
+// IsAdmin reports whether the caller sees every order.
+func (s *Server) IsAdmin(c *Caller) bool {
+	return s.Auth == nil || c.ID == nil || s.Auth.Config().IsAdmin(*c.ID)
+}
+
+// VisibleTo is the visibility part of a filter: nil when the caller sees
+// everything (auth off, admin).
+func (s *Server) VisibleTo(c *Caller) func(*v1alpha1.Order) bool {
+	return s.visibleTo(c)
+}
+
 func (s *Server) visibleTo(c *Caller) func(*v1alpha1.Order) bool {
 	if s.Auth == nil || c.ID == nil || s.Auth.Config().IsAdmin(*c.ID) {
 		return nil
@@ -385,8 +396,12 @@ func (s *Server) Create(ctx context.Context, c *Caller, req CreateRequest) (int,
 		return http.StatusConflict, ErrorResponse{Error: fmt.Sprintf("management cluster %s is cordoned", mc.Name)}
 	}
 	requestedBy := req.RequestedBy
+	var requestedByGroups []string
 	if c.ID != nil {
 		requestedBy = c.Ref
+		if s.Auth != nil {
+			requestedByGroups = s.Auth.Config().Groups(*c.ID)
+		}
 	}
 	params := req.Parameters
 	if params == nil {
@@ -403,7 +418,7 @@ func (s *Server) Create(ctx context.Context, c *Caller, req CreateRequest) (int,
 			Labels: map[string]string{v1alpha1.OrderIDKey: id},
 		},
 		Spec: v1alpha1.OrderSpec{
-			Template: req.Template, Parameters: raw, RequestedBy: requestedBy, Reason: req.Reason,
+			Template: req.Template, Parameters: raw, RequestedBy: requestedBy, RequestedByGroups: requestedByGroups, Reason: req.Reason,
 			Placement: v1alpha1.Placement{ManagementCluster: mc.Name},
 			Delivery:  v1alpha1.DeliveryPullRequest,
 		},
@@ -428,11 +443,7 @@ func (s *Server) Create(ctx context.Context, c *Caller, req CreateRequest) (int,
 	}
 	o.Spec.Rendered = rd
 	if req.AutoMerge {
-		var groups []string
-		if c.ID != nil && s.Auth != nil {
-			groups = s.Auth.Config().Groups(*c.ID)
-		}
-		rule, why := automerge.Find(mc.Spec.AutoMerge, v1alpha1.ActionOrder, requestedBy, groups, req.Template, automerge.Params(rd))
+		rule, why := automerge.Find(mc.Spec.AutoMerge, v1alpha1.ActionOrder, requestedBy, requestedByGroups, req.Template, automerge.Params(rd))
 		if rule == nil {
 			return http.StatusForbidden, ErrorResponse{Error: fmt.Sprintf(
 				"auto-merge not allowed on %s: %s. Order without autoMerge and a human merges (rules: GET /api/v1/management-clusters)", mc.Name, why)}
@@ -506,11 +517,42 @@ func summary(o *v1alpha1.Order) *v1alpha1.Order {
 	return o
 }
 
+// NoGroup is the Filter.Group of orders with neither an owner nor recorded
+// orderer groups.
+const NoGroup = "-"
+
+// Groups are what an order belongs to, for grouping in the UI: the owner
+// parameter, else the orderer's groups at order time. Read from the full
+// order (the owner is in the rendered parameters, which summary drops).
+func Groups(o *v1alpha1.Order) []string {
+	if owner := Owner(o); owner != "" {
+		return []string{owner}
+	}
+	return o.Spec.RequestedByGroups
+}
+
+// Row is an order for a list, with what the summary drops.
+type Row struct {
+	Order *v1alpha1.Order
+	// Owner is the owner parameter ("" when none).
+	Owner string
+	// Groups as Groups(o).
+	Groups []string
+}
+
+// RowOf builds the Row of a full order.
+func RowOf(o *v1alpha1.Order) Row {
+	return Row{Order: summary(o), Owner: Owner(o), Groups: Groups(o)}
+}
+
 // Filter selects orders for a list or a watch.
 type Filter struct {
 	RequestedBy string
 	Phase       string
 	Cluster     string
+	// Group keeps the orders whose Groups contain it; NoGroup keeps those
+	// without any.
+	Group string
 	// Visible, when set, hides the orders the caller may not see.
 	Visible func(*v1alpha1.Order) bool
 }
@@ -520,7 +562,8 @@ func (f Filter) Match(o *v1alpha1.Order) bool {
 	return (f.Visible == nil || f.Visible(o)) &&
 		(f.RequestedBy == "" || o.Spec.RequestedBy == f.RequestedBy) &&
 		(f.Phase == "" || string(o.Status.Phase) == f.Phase) &&
-		(f.Cluster == "" || o.Spec.Placement.ManagementCluster == f.Cluster)
+		(f.Cluster == "" || o.Spec.Placement.ManagementCluster == f.Cluster) &&
+		(f.Group == "" || (f.Group == NoGroup && len(Groups(o)) == 0) || slices.Contains(Groups(o), f.Group))
 }
 
 func (s *Server) filter(w http.ResponseWriter, r *http.Request, c *Caller) (Filter, bool) {
@@ -538,18 +581,31 @@ func (s *Server) filter(w http.ResponseWriter, r *http.Request, c *Caller) (Filt
 
 // List returns the orders that pass f, newest first.
 func (s *Server) List(ctx context.Context, f Filter) ([]v1alpha1.Order, error) {
+	rows, err := s.ListRows(ctx, f)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]v1alpha1.Order, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, *r.Order)
+	}
+	return out, nil
+}
+
+// ListRows is List with each order's owner and groups.
+func (s *Server) ListRows(ctx context.Context, f Filter) ([]Row, error) {
 	var list v1alpha1.OrderList
 	if err := s.Client.List(ctx, &list, client.InNamespace(s.Namespace)); err != nil {
 		return nil, err
 	}
-	out := make([]v1alpha1.Order, 0, len(list.Items))
+	out := make([]Row, 0, len(list.Items))
 	for i := range list.Items {
 		if f.Match(&list.Items[i]) {
-			out = append(out, *summary(&list.Items[i]))
+			out = append(out, RowOf(&list.Items[i]))
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
-		return out[j].CreationTimestamp.Before(&out[i].CreationTimestamp)
+		return out[j].Order.CreationTimestamp.Before(&out[i].Order.CreationTimestamp)
 	})
 	return out, nil
 }
