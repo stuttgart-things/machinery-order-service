@@ -1,3 +1,10 @@
+# [0.5.0](https://github.com/stuttgart-things/machinery-order-service/compare/v0.4.1...v0.5.0) (2026-11-22)
+
+
+### Features
+
+* teardown as a delete-claim pull request, delete order branches after merge ([ae0de36](https://github.com/stuttgart-things/machinery-order-service/commit/ae0de361f773ba6515cc477925783d022a389244)), closes [#19](https://github.com/stuttgart-things/machinery-order-service/issues/19) [#20](https://github.com/stuttgart-things/machinery-order-service/issues/20) [#19](https://github.com/stuttgart-things/machinery-order-service/issues/19) [#20](https://github.com/stuttgart-things/machinery-order-service/issues/20)
+
 ## [0.4.1](https://github.com/stuttgart-things/machinery-order-service/compare/v0.4.0...v0.4.1) (2026-11-19)
 
 
