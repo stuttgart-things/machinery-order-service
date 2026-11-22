@@ -359,6 +359,10 @@ func TestAutoMergeIntake(t *testing.T) {
 	if am, _ := out["spec"].(map[string]any)["autoMerge"].(map[string]any); am["rule"] != "personas" {
 		t.Errorf("spec.autoMerge %v", out["spec"])
 	}
+	// The orderer's groups are recorded, for grouping in the UI.
+	if g, _ := out["spec"].(map[string]any)["requestedByGroups"].([]any); len(g) != 1 || g[0] != "group:default/ai-personas" {
+		t.Errorf("spec.requestedByGroups %v", out["spec"])
+	}
 	for name, tc := range map[string]struct {
 		token, size, want string
 	}{

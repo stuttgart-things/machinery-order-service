@@ -253,3 +253,91 @@ func TestTeardownButton(t *testing.T) {
 		t.Error("the timeline shows no teardown")
 	}
 }
+
+// owned is an order whose rendered parameters name an owner group.
+func owned(name, user, owner string, created time.Time) *v1alpha1.Order {
+	o := order(name, user, v1alpha1.PhaseReady)
+	o.CreationTimestamp = metav1.NewTime(created)
+	o.Spec.Rendered.Parameters = &runtime.RawExtension{Raw: []byte(`{"owner":"` + owner + `"}`)}
+	return o
+}
+
+func TestAllOrdersByGroup(t *testing.T) {
+	iss := authtest.NewIssuer(t)
+	a, err := auth.New(auth.Config{Issuer: iss.URL(), Audiences: []string{"x"}, CAFile: iss.CAFile,
+		TrustForwardedUser: true, AdminRoles: []string{"portal-admin"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	persona := order("ord-persona", "user:default/persona-developer", v1alpha1.PhaseReady)
+	persona.CreationTimestamp = metav1.NewTime(now.Add(-1 * time.Minute))
+	persona.Spec.RequestedByGroups = []string{"group:default/ai-personas", "group:default/guests"}
+	old := order("ord-nogroup", "user:default/carol", v1alpha1.PhaseDeleted) // before requestedByGroups
+	old.CreationTimestamp = metav1.NewTime(now.Add(-3 * time.Hour))
+	h, _ := handler(t, a,
+		owned("ord-ops", "user:default/bob", "group:default/ops", now.Add(-2*time.Hour)),
+		owned("ord-platform", "user:default/alice", "group:default/platform-team", now.Add(-30*time.Minute)),
+		persona, old)
+
+	// Admin: every order, with orderer and group columns.
+	admin := map[string]string{"X-Forwarded-User": "alice@sthings.example", "X-Forwarded-Groups": "portal-admin"}
+	_, mine := get(t, h, "/orders/ui/", admin)
+	if !strings.Contains(mine, "ord-platform") || strings.Contains(mine, "ord-persona") {
+		t.Error("my orders: want only alice's")
+	}
+	_, all := get(t, h, "/orders/ui/?scope=all", admin)
+	for _, want := range []string{"ord-ops", "ord-platform", "ord-persona", "ord-nogroup", "Every order (admin)",
+		"<th>Requested by</th><th>Group</th>", `<code title="owner group:default/ops">ops</code>`,
+		`title="no owner: the orderer's groups group:default/ai-personas, group:default/guests">ai-personas, guests</span>`,
+		`<option value="group:default/ai-personas">`, `EventSource('ui/events?scope=all')`} {
+		if !strings.Contains(all, want) {
+			t.Errorf("all orders lacks %q", want)
+		}
+	}
+	if m := absolute.FindString(strings.Replace(all, `<base href="/orders/">`, "", 1)); m != "" {
+		t.Errorf("absolute URL in the all-orders page: %q", m)
+	}
+
+	// One group: the owner or one of the orderer's groups.
+	_, one := get(t, h, "/orders/ui/?scope=all&group="+url.QueryEscape("group:default/ai-personas"), admin)
+	if !strings.Contains(one, "ord-persona") || strings.Contains(one, "ord-ops") || strings.Contains(one, "ord-platform") {
+		t.Error("group filter ai-personas")
+	}
+	if !strings.Contains(one, `<option value="group:default/ops">`) {
+		t.Error("the group filter should still offer the other groups")
+	}
+	_, none := get(t, h, "/orders/ui/?scope=all&group=-", admin)
+	if !strings.Contains(none, "ord-nogroup") || strings.Contains(none, "ord-persona") {
+		t.Error("group filter: no group")
+	}
+
+	// Sorted by group: headers in order, orders without a group last.
+	_, by := get(t, h, "/orders/ui/?scope=all&sort=group", admin)
+	idx := func(s string) int { return strings.Index(by, s) }
+	heads := []string{`data-group-head="group:default/ai-personas, group:default/guests"`, `data-group-head="group:default/ops"`,
+		`data-group-head="group:default/platform-team"`, `data-group-head=""`}
+	for i, hd := range heads {
+		if idx(hd) < 0 {
+			t.Fatalf("missing group header %s", hd)
+		}
+		if i > 0 && idx(heads[i-1]) > idx(hd) {
+			t.Errorf("group %s before %s", hd, heads[i-1])
+		}
+	}
+	if !(idx(heads[1]) < idx("ord-ops") && idx("ord-ops") < idx(heads[2])) {
+		t.Error("ord-ops not under its group")
+	}
+	// html/template writes & in a JS string as &, which the browser reads as &.
+	if !strings.Contains(by, "EventSource('ui/events?scope=all\\u0026sort=group')") {
+		t.Errorf("events URL does not keep the view: %s", regexp.MustCompile(`EventSource\([^)]*\)`).FindString(by))
+	}
+
+	// Not an admin: own orders and the teams' (owner), not the persona's.
+	bob := map[string]string{"X-Forwarded-User": "bob@sthings.example", "X-Forwarded-Groups": "backstage-team-platform-team"}
+	_, bobs := get(t, h, "/orders/ui/?scope=all", bob)
+	if !strings.Contains(bobs, "ord-ops") || !strings.Contains(bobs, "ord-platform") || strings.Contains(bobs, "ord-persona") ||
+		!strings.Contains(bobs, "Yours and your teams") || !strings.Contains(bobs, "All I may see") {
+		t.Error("non-admin all view: want own + team-owned only")
+	}
+}

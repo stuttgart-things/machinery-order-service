@@ -93,7 +93,7 @@ func (u *UI) ordersFragment(w http.ResponseWriter, r *http.Request) {
 		render(w, ordersFragmentTmpl, data)
 		return
 	}
-	orders, err := u.API.List(r.Context(), filter(c))
+	orders, err := u.API.List(r.Context(), u.filter(c, view{}))
 	if err != nil {
 		data.Err = err.Error()
 		render(w, ordersFragmentTmpl, data)

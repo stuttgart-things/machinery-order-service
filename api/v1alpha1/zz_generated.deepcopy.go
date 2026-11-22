@@ -416,6 +416,11 @@ func (in *OrderSpec) DeepCopyInto(out *OrderSpec) {
 		*out = new(runtime.RawExtension)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.RequestedByGroups != nil {
+		in, out := &in.RequestedByGroups, &out.RequestedByGroups
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	out.Placement = in.Placement
 	if in.Rendered != nil {
 		in, out := &in.Rendered, &out.Rendered
