@@ -1,3 +1,10 @@
+# [0.6.0](https://github.com/stuttgart-things/machinery-order-service/compare/v0.5.0...v0.6.0) (2026-11-22)
+
+
+### Features
+
+* **ui:** all orders view, filtered and grouped by group ([5c4b8ce](https://github.com/stuttgart-things/machinery-order-service/commit/5c4b8ce0331472e7a7ac2022f408d2df0c4485bf))
+
 # [0.5.0](https://github.com/stuttgart-things/machinery-order-service/compare/v0.4.1...v0.5.0) (2026-11-22)
 
 
