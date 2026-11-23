@@ -1,3 +1,10 @@
+# [0.7.0](https://github.com/stuttgart-things/machinery-order-service/compare/v0.6.0...v0.7.0) (2026-11-23)
+
+
+### Features
+
+* per-cluster claim-machinery-api and parameter prefixes in auto-merge rules ([#26](https://github.com/stuttgart-things/machinery-order-service/issues/26)) ([9533967](https://github.com/stuttgart-things/machinery-order-service/commit/953396707e22204103df3039dd23cc14d75a3e56)), closes [stuttgart-things/stuttgart-things#4828](https://github.com/stuttgart-things/stuttgart-things/issues/4828)
+
 # [0.6.0](https://github.com/stuttgart-things/machinery-order-service/compare/v0.5.0...v0.6.0) (2026-11-22)
 
 
