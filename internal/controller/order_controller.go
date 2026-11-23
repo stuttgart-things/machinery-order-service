@@ -294,7 +294,7 @@ func (r *OrderReconciler) deliver(ctx context.Context, o *v1alpha1.Order) (ctrl.
 	o.Status.XRRef = xr
 	o.Status.Files = intake.Paths(rd)
 
-	tmpl, err := r.Renderer.Template(ctx, o.Spec.Template, "")
+	tmpl, err := intake.For(r.Renderer, mc).Template(ctx, o.Spec.Template, "")
 	if err != nil {
 		return fail(o, "reading the template", err)
 	}

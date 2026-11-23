@@ -32,6 +32,15 @@ type Render struct {
 	// template's default (the lab's).
 	// +optional
 	EnvironmentConfig string `json:"environmentConfig,omitempty"`
+	// ClaimAPIURL is the claim-machinery-api this cluster's orders are
+	// rendered with (and their templates read from); empty = the service's
+	// CLAIM_API_URL. A staging cluster names its own, so the version under
+	// test renders its orders (stuttgart-things/stuttgart-things#4828). The
+	// service's own token (CLAIM_API_*) is sent there too, so that API must
+	// accept the same audience.
+	// +kubebuilder:validation:Pattern=`^https?://`
+	// +optional
+	ClaimAPIURL string `json:"claimApiUrl,omitempty"`
 }
 
 // SecretKeyRef points to one key of a Secret.
@@ -115,6 +124,11 @@ type AutoMergeRule struct {
 	// listed parameter must have one of the values.
 	// +optional
 	Parameters map[string][]string `json:"parameters,omitempty"`
+	// ParameterPrefixes limit rendered parameter values by prefix: each
+	// listed parameter must start with one of the prefixes, e.g.
+	// name: [persona-] so test orders can be told apart from real ones.
+	// +optional
+	ParameterPrefixes map[string][]string `json:"parameterPrefixes,omitempty"`
 	// Actions the rule allows: order (the order's own pull request) and
 	// teardown (its delete-claim pull request, docs/adr/0003-teardown.md).
 	// Empty = [order].

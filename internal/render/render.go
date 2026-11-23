@@ -80,6 +80,14 @@ func FromEnv() (*Client, error) {
 	return c, nil
 }
 
+// WithBaseURL returns a copy of c that talks to base instead, with the same
+// HTTP client and service token.
+func (c *Client) WithBaseURL(base string) *Client {
+	cp := *c
+	cp.BaseURL = strings.TrimRight(base, "/")
+	return &cp
+}
+
 // APIError is a non-2xx answer of claim-machinery-api.
 type APIError struct {
 	Status  int

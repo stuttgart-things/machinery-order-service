@@ -99,6 +99,16 @@ spec:
                         name:
                           minLength: 1
                           type: string
+                        parameterPrefixes:
+                          additionalProperties:
+                            items:
+                              type: string
+                            type: array
+                          description: |-
+                            ParameterPrefixes limit rendered parameter values by prefix: each
+                            listed parameter must start with one of the prefixes, e.g.
+                            name: [persona-] so test orders can be told apart from real ones.
+                          type: object
                         parameters:
                           additionalProperties:
                             items:
@@ -213,6 +223,16 @@ spec:
                 description: Render is what the management cluster adds to every order's
                   parameters.
                 properties:
+                  claimApiUrl:
+                    description: |-
+                      ClaimAPIURL is the claim-machinery-api this cluster's orders are
+                      rendered with (and their templates read from); empty = the service's
+                      CLAIM_API_URL. A staging cluster names its own, so the version under
+                      test renders its orders (stuttgart-things/stuttgart-things#4828). The
+                      service's own token (CLAIM_API_*) is sent there too, so that API must
+                      accept the same audience.
+                    pattern: ^https?://
+                    type: string
                   clusterName:
                     description: |-
                       ClusterName is passed as management_cluster; empty = the

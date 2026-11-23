@@ -71,3 +71,29 @@ func TestFindTeardown(t *testing.T) {
 		t.Fatalf("a teardown-only rule allowed an order: %v", r)
 	}
 }
+
+func TestCoversParameterPrefixes(t *testing.T) {
+	r := v1alpha1.AutoMergeRule{Name: "persona-test-vms",
+		Parameters:        map[string][]string{"size": {"small"}},
+		ParameterPrefixes: map[string][]string{"name": {"persona-", "pt-"}}}
+	cases := []struct {
+		name   string
+		params map[string]any
+		ok     bool
+		why    string
+	}{
+		{"prefixed", map[string]any{"size": "small", "name": "persona-ssh-auto"}, true, ""},
+		{"second prefix", map[string]any{"size": "small", "name": "pt-1"}, true, ""},
+		{"wrong name", map[string]any{"size": "small", "name": "prod-db"}, false, "name=prod-db does not start with one of [persona- pt-]"},
+		{"name missing", map[string]any{"size": "small"}, false, "parameter name is not set"},
+		{"size still checked", map[string]any{"size": "medium", "name": "persona-x"}, false, "size=medium not in [small]"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ok, why := Covers(r, "vm", c.params)
+			if ok != c.ok || (c.why != "" && !strings.Contains(why, c.why)) {
+				t.Fatalf("Covers = %v %q, want %v %q", ok, why, c.ok, c.why)
+			}
+		})
+	}
+}

@@ -59,6 +59,21 @@ func Covers(r v1alpha1.AutoMergeRule, template string, params map[string]any) (b
 			return false, fmt.Sprintf("%s=%s not in %v", k, s, r.Parameters[k])
 		}
 	}
+	keys = keys[:0]
+	for k := range r.ParameterPrefixes {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	for _, k := range keys {
+		v, ok := params[k]
+		if !ok {
+			return false, fmt.Sprintf("parameter %s is not set", k)
+		}
+		s := scalar(v)
+		if !slices.ContainsFunc(r.ParameterPrefixes[k], func(p string) bool { return strings.HasPrefix(s, p) }) {
+			return false, fmt.Sprintf("%s=%s does not start with one of %v", k, s, r.ParameterPrefixes[k])
+		}
+	}
 	return true, ""
 }
 
