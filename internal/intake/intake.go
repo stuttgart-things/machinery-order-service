@@ -58,6 +58,19 @@ type Renderer interface {
 	Template(ctx context.Context, name, callerToken string) (*render.Template, error)
 }
 
+// For returns the renderer for mc's orders: r itself, or a copy of it
+// pointed at the cluster's own claim-machinery-api when the cluster names
+// one (spec.render.claimApiUrl) and r is a *render.Client.
+func For(r Renderer, mc *v1alpha1.ManagementCluster) Renderer {
+	if mc == nil || mc.Spec.Render.ClaimAPIURL == "" {
+		return r
+	}
+	if c, ok := r.(*render.Client); ok {
+		return c.WithBaseURL(mc.Spec.Render.ClaimAPIURL)
+	}
+	return r
+}
+
 // InvalidError is an order that cannot be rendered as given (the orderer's
 // fault).
 type InvalidError struct{ Msg string }
@@ -146,6 +159,7 @@ func Render(ctx context.Context, r Renderer, o *v1alpha1.Order, mc *v1alpha1.Man
 	if err != nil {
 		return nil, err
 	}
+	r = For(r, mc)
 	if _, ok := params[ParamRequestedBy]; ok && callerToken == "" {
 		tmpl, err := r.Template(ctx, o.Spec.Template, "")
 		if err != nil {

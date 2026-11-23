@@ -104,10 +104,12 @@ Group `order.machinery.stuttgart-things.com/v1alpha1`, CRDs in
   by the teardown endpoint).
   Template, placement, rendered and autoMerge are immutable.
 - **ManagementCluster** (cluster-scoped): `gitops.{repository, baseBranch,
-  ordersPath}`, `render.{clusterName, environmentConfig}`,
+  ordersPath}`, `render.{clusterName, environmentConfig, claimApiUrl}`
+  (`claimApiUrl`: this cluster's own claim-machinery-api for rendering and
+  templates; empty = `CLAIM_API_URL`, e.g. for a staging cluster),
   `machinery.{endpoint, insecure, tokenSecretRef}`,
   `flux.{name, namespace, kind, revisionField}`,
-  `autoMerge.{method, rules[].{name, users, groups, templates, parameters, actions}}`
+  `autoMerge.{method, rules[].{name, users, groups, templates, parameters, parameterPrefixes, actions}}`
   (`actions`: `order`, `teardown`; empty = `[order]`),
   `cordoned`.
 
@@ -154,6 +156,7 @@ spec:
         groups: [group:default/ai-personas]   # or users: [user:default/<name>]
         templates: [native-vm-labul-proxmox]  # empty = any
         parameters: {size: [small]}           # rendered values, defaults included
+        parameterPrefixes: {name: [persona-]} # optional: rendered value starts with one
 ```
 
 No matching rule: the order is refused with 403. A matching order merges once

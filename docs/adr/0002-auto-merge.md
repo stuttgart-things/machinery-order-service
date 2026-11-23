@@ -29,12 +29,15 @@ Auto-merge needs two things. Without both, a human merges as before.
            templates: [native-vm-labul-proxmox]
            parameters:                        # rendered values, defaults included
              size: [small]
+           parameterPrefixes:                 # optional, rendered values by prefix
+             name: [persona-]
    ```
 
    A rule matches when:
    - the orderer is listed under `users`, or one of its groups is listed under `groups`. A rule without users and groups matches nobody.
    - the template is listed under `templates`, or `templates` is empty.
    - every listed parameter has one of the allowed values in the *rendered* order. Defaults count, so `size` left out means `medium` and does not match `[small]`.
+   - every parameter under `parameterPrefixes` starts with one of its prefixes, e.g. `name: [persona-]`, so test VMs on shared hardware are recognisable by name (stuttgart-things/stuttgart-things#4828).
 
 The rules live in git with the cluster's other settings. Changing them is a reviewed pull request; no API changes them.
 
