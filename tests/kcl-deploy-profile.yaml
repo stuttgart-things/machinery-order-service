@@ -9,6 +9,8 @@ config.httpRouteEnabled: true
 config.httpRouteParentRefName: sthings-gateway
 config.httpRouteParentRefNamespace: default
 config.httpRouteHostname: machinery-order-service.example.sthings
+config.grpcRouteEnabled: true
+config.grpcRouteHostname: machinery-order-service-grpc.example.sthings
 config.authOidcIssuer: https://zitadel.example.sthings
 config.authOidcAudience: machinery-order-service
 config.authTrustForwardedUser: true

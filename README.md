@@ -90,6 +90,45 @@ curl -X POST "$URL/api/v1/orders" -H "Authorization: Bearer $TOKEN" -H 'Content-
 }'
 ```
 
+## gRPC API
+
+`order.v1.OrderService` ([`api/proto/order/v1/order.proto`](api/proto/order/v1/order.proto))
+on its own port, `GRPC_PORT` (default `9090`), on every replica. It calls the
+same service layer as REST: validation and rendering with the caller's token,
+visibility (ADR 0001), auto-merge rules (ADR 0002), teardown (ADR 0003).
+
+| RPC | REST |
+|---|---|
+| `CreateOrder` | `POST /api/v1/orders` |
+| `GetOrder` | `GET /api/v1/orders/{id}` (with the rendered files) |
+| `ListOrders` | `GET /api/v1/orders` (`filter.mine`, `.phase`, `.cluster`) |
+| `WatchOrders` (server stream) | `GET /api/v1/orders/watch`; `send_initial` sends the current orders and `SYNCED` first, `resource_version` resumes (orders changed after it); `order_id` + `until_phases` follows one order and ends there (Cancelled/Failed/deleted always end it) |
+| `CancelOrder`, `TeardownOrder` | `POST /api/v1/orders/{id}/cancel`, `/teardown` |
+| `ListManagementClusters` | `GET /api/v1/management-clusters` |
+
+Auth as REST: the ZITADEL token in the `authorization` metadata
+(`Bearer <token>`), `requested_by` from the token. No token or a bad one:
+`Unauthenticated`; no order role: `PermissionDenied`; an order the caller may
+not see: `NotFound`. Errors: 400 → `InvalidArgument` (claim-machinery-api's
+fields as `google.rpc.BadRequest` field violations), 403 → `PermissionDenied`,
+404 → `NotFound`, 409 → `FailedPrecondition`, or `Aborted` when the order
+moved since `resource_version`. Health (`grpc.health.v1`) and reflection need
+no token.
+
+A separate port instead of h2c on the HTTP port: no HTTP middleware or SSE
+buffering in the way, and the gateway gets a plain gRPC backend
+(`GRPCRoute`, `grpcRouteEnabled`/`grpcRouteHostname` in the KCL module).
+
+```bash
+grpcurl -H "authorization: Bearer $TOKEN" -d '{
+  "template": "native-vm-labda-vsphere", "management_cluster": "machinery",
+  "parameters": {"name": "demo", "size": "small"}
+}' $GRPC_HOST:443 order.v1.OrderService/CreateOrder
+
+grpcurl -H "authorization: Bearer $TOKEN" -d '{"order_id": "ord-…", "until_phases": ["PROpen"]}' \
+  $GRPC_HOST:443 order.v1.OrderService/WatchOrders
+```
+
 ## Custom resources
 
 Group `order.machinery.stuttgart-things.com/v1alpha1`, CRDs in
@@ -133,6 +172,7 @@ order goes from Merged to Building once machinery sees its XR.
 | `AUTH_OIDC_ISSUER`, `AUTH_OIDC_AUDIENCE`, `AUTH_OIDC_CA_FILE`, `AUTH_ORDER_ROLES`, `AUTH_ROLES_CLAIM`, `AUTH_ADMIN_ROLES`, `AUTH_ROLE_GROUPS`, `AUTH_TRUST_FORWARDED_USER` | ZITADEL auth, as in claim-machinery-api | off |
 | `ORDER_NAMESPACE` | where Orders live | the pod's namespace |
 | `PORT`, `BASE_PATH` | API/UI | `8080`, - |
+| `GRPC_PORT` | gRPC API | `9090` |
 | `METRICS_ADDR`, `PROBE_ADDR` | controller-runtime | `:8081`, `:8082` |
 | `LEADER_ELECT` | leader election for the controller (the API runs on every replica) | off |
 | `PR_POLL_INTERVAL`, `LIVE_POLL_INTERVAL` | how often PR/Flux and machinery are checked | `1m`, `30s` |
@@ -172,7 +212,8 @@ so clients that only read the message (claims) see it too. Decision and limits:
 
 KCL module in [`deployment`](deployment): namespace, the two CRDs, service
 account, ClusterRole/-Binding, ConfigMap, Deployment, Service, optional
-Ingress or HTTPRoute, and ManagementCluster objects. CRDs and RBAC come from
+Ingress or HTTPRoute, optional GRPCRoute for the gRPC API, and
+ManagementCluster objects. CRDs and RBAC come from
 `deployment/generated` (copied from `config/` by `task generate`; CI fails
 when they drift).
 
@@ -194,7 +235,7 @@ to that image.
 ## Development
 
 ```bash
-task generate          # deepcopy, CRDs, RBAC, deployment/generated
+task generate          # deepcopy, CRDs, RBAC, deployment/generated, gRPC code (needs protoc)
 task test              # unit tests + envtest (controller and serve end to end)
 task build-local       # ./bin/machinery-order-service
 task run               # against the current kubeconfig
@@ -209,7 +250,6 @@ Tests use fakes for everything outside: `internal/delivery/githubfake`
 
 ## Not here yet
 
-- a gRPC API next to REST
 - teardown after the merge, recovering Orders from git + live (`Recovered`),
   `adopt` for hand-written XRs; finding XRs by order-id in machinery needs
   stuttgart-things/stuttgart-things#4557

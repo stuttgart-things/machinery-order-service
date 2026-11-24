@@ -26,6 +26,10 @@ _httpRouteParentRefName = option("config.httpRouteParentRefName")
 _httpRouteParentRefNamespace = option("config.httpRouteParentRefNamespace")
 _httpRouteHostname = option("config.httpRouteHostname")
 _httpRouteAnnotations = option("config.httpRouteAnnotations") or {}
+_grpcPort = option("config.grpcPort")
+_grpcRouteEnabled = option("config.grpcRouteEnabled")
+_grpcRouteHostname = option("config.grpcRouteHostname")
+_grpcRouteAnnotations = option("config.grpcRouteAnnotations") or {}
 _authOidcIssuer = option("config.authOidcIssuer")
 _authOidcAudience = option("config.authOidcAudience")
 _authOrderRoles = option("config.authOrderRoles")
@@ -77,6 +81,14 @@ config: schema.MachineryOrderService = schema.MachineryOrderService {
         httpRouteHostname = _httpRouteHostname
     if _httpRouteAnnotations:
         httpRouteAnnotations = _httpRouteAnnotations
+    if _grpcPort:
+        grpcPort = int(_grpcPort)
+    if _grpcRouteEnabled:
+        grpcRouteEnabled = _b(_grpcRouteEnabled)
+    if _grpcRouteHostname:
+        grpcRouteHostname = _grpcRouteHostname
+    if _grpcRouteAnnotations:
+        grpcRouteAnnotations = _grpcRouteAnnotations
     if _authOidcIssuer:
         authOidcIssuer = _authOidcIssuer
     if _authOidcAudience:

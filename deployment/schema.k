@@ -26,6 +26,8 @@ schema MachineryOrderService:
     containerPort: int = 8080
     metricsPort: int = 8081
     probePort: int = 8082
+    # gRPC API (GRPC_PORT), on the container and the Service.
+    grpcPort: int = 9090
 
     # CRDs and the ClusterRole (deployment/generated, from config/ by
     # `task generate`). Off when the CRDs are installed some other way.
@@ -45,6 +47,12 @@ schema MachineryOrderService:
     httpRouteParentRefNamespace: str = ""
     httpRouteHostname: str = ""
     httpRouteAnnotations: {str:str} = {}
+
+    # GRPCRoute (Gateway API) for the gRPC API, on the HTTPRoute's parent
+    # gateway. gRPC needs a hostname of its own (and an HTTPS listener).
+    grpcRouteEnabled: bool = False
+    grpcRouteHostname: str = ""
+    grpcRouteAnnotations: {str:str} = {}
 
     # Application
     claimApiUrl: str = ""
@@ -89,6 +97,8 @@ schema MachineryOrderService:
         replicas >= 0, "replicas must be >= 0"
         servicePort >= 1 and servicePort <= 65535, "servicePort must be valid"
         containerPort >= 1 and containerPort <= 65535, "containerPort must be valid"
+        grpcPort >= 1 and grpcPort <= 65535 and grpcPort != containerPort, "grpcPort must be valid and differ from containerPort"
+        not grpcRouteEnabled or (httpRouteParentRefName and grpcRouteHostname), "grpcRouteEnabled needs httpRouteParentRefName and grpcRouteHostname"
         claimApiUrl, "claimApiUrl is required"
         not basePath or regex.match(basePath, r"^(/[A-Za-z0-9._~-]+)+$"), "basePath must be empty or /segment[/segment...] without a trailing slash"
         not httpRouteEnabled or httpRouteParentRefName, "httpRouteParentRefName is required with httpRouteEnabled"

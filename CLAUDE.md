@@ -6,7 +6,7 @@ Guidance for Claude Code in this repository.
 
 ```bash
 export GOTOOLCHAIN=go1.27.4
-task generate                       # after changing api/v1alpha1 or kubebuilder markers (also refreshes deployment/generated)
+task generate                       # after changing api/v1alpha1, kubebuilder markers or api/proto (also refreshes deployment/generated; needs protoc)
 task test                           # needs envtest binaries (task envtest)
 KUBEBUILDER_ASSETS=$(setup-envtest use 1.37.0 -p path) go test ./...
 go test ./internal/controller -run TestOrderLifecycle -v
@@ -42,6 +42,10 @@ API (`apiRunnable`, every replica).
   (`fail`), others go back to controller-runtime's backoff.
 - `internal/api` - REST + SSE (`Hub`, fed by the Order informer). `Create`,
   `List`, `Get`, `Cancel`, `Stream` are shared with the UI.
+- `internal/grpcapi` - gRPC API (`api/proto/order/v1`, generated code next to
+  the .proto, `GRPC_PORT` 9090) on top of `internal/api`'s `Server`
+  (`Identify`, `Create`, `List`, `Cancel`, `Teardown`, `Hub`); no rules of
+  its own.
 - `internal/auth` - copy of claim-machinery-api `internal/auth` (same env
   vars); keep in sync.
 - `internal/web` - UI stage 1 (`ui/` my orders, `ui/?scope=all` everything the

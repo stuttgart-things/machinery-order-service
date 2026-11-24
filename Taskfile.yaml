@@ -5,6 +5,8 @@ vars:
   PROJECT: machinery-order-service
   GO_MODULE: github.com/stuttgart-things/machinery-order-service
   CONTROLLER_TOOLS_VERSION: v0.23.0
+  PROTOC_GEN_GO_VERSION: v1.36.12
+  PROTOC_GEN_GO_GRPC_VERSION: v1.6.2
   ENVTEST_K8S_VERSION: "1.37.0"
   DAGGER_MODULE_DIR: ./.dagger
   DAGGER_KCL_MODULE: github.com/stuttgart-things/dagger/kcl@v0.139.0
@@ -20,8 +22,11 @@ env:
 
 tasks:
   generate:
-    desc: Deepcopy, CRDs and RBAC from the API types and markers; copy them into deployment/generated
+    desc: Deepcopy, CRDs and RBAC from the API types and markers; copy them into deployment/generated; gRPC code from api/proto (needs protoc)
     cmds:
+      - GOBIN="$PWD/bin" go install google.golang.org/protobuf/cmd/protoc-gen-go@{{.PROTOC_GEN_GO_VERSION}}
+      - GOBIN="$PWD/bin" go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@{{.PROTOC_GEN_GO_GRPC_VERSION}}
+      - PATH="$PWD/bin:$PATH" protoc -I api/proto --go_out=api/proto --go_opt=paths=source_relative --go-grpc_out=api/proto --go-grpc_opt=paths=source_relative api/proto/order/v1/order.proto
       - go run sigs.k8s.io/controller-tools/cmd/controller-gen@{{.CONTROLLER_TOOLS_VERSION}} object paths=./api/...
       - go run sigs.k8s.io/controller-tools/cmd/controller-gen@{{.CONTROLLER_TOOLS_VERSION}} crd paths=./api/... output:crd:artifacts:config=config/crd
       - go run sigs.k8s.io/controller-tools/cmd/controller-gen@{{.CONTROLLER_TOOLS_VERSION}} rbac:roleName=machinery-order-service paths=./internal/controller/... output:rbac:artifacts:config=config/rbac

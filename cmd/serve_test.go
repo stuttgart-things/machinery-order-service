@@ -16,7 +16,9 @@ import (
 	maschinist "github.com/stuttgart-things/machinery/resourceservice"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/structpb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/clientcmd"
@@ -24,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
+	orderv1 "github.com/stuttgart-things/machinery-order-service/api/proto/order/v1"
 	"github.com/stuttgart-things/machinery-order-service/api/v1alpha1"
 	"github.com/stuttgart-things/machinery-order-service/internal/delivery/githubfake"
 	"github.com/stuttgart-things/machinery-order-service/internal/render/rendertest"
@@ -107,9 +110,9 @@ func TestServe(t *testing.T) {
 	go func() { _ = gs.Serve(lis) }()
 	defer gs.Stop()
 
-	port := freePort(t)
+	port, grpcPort := freePort(t), freePort(t)
 	for k, v := range map[string]string{
-		"KUBECONFIG": kcPath, "ORDER_NAMESPACE": "default", "PORT": port, "METRICS_ADDR": "0", "PROBE_ADDR": "0",
+		"KUBECONFIG": kcPath, "ORDER_NAMESPACE": "default", "PORT": port, "GRPC_PORT": grpcPort, "METRICS_ADDR": "0", "PROBE_ADDR": "0",
 		"CLAIM_API_URL": claimAPI.URL, "GITHUB_API_URL": gh.URL, "GITHUB_TOKEN": "t",
 		"GITHUB_APP_ID": "", "GITHUB_APP_INSTALLATION_ID": "", "GITHUB_APP_PRIVATE_KEY_FILE": "", "AUTH_OIDC_ISSUER": "",
 		"PR_POLL_INTERVAL": "200ms", "LIVE_POLL_INTERVAL": "200ms", "BASE_PATH": "/orders",
@@ -184,6 +187,44 @@ func TestServe(t *testing.T) {
 	if o := order(); o.Status.Live == nil || o.Status.Live.Address != "10.31.103.42" || o.Status.Live.Info["ansibleSucceeded"] != "True" {
 		t.Errorf("live %+v", o.Status.Live)
 	}
+	// #24: the same through gRPC: create, watch until PROpen, see it in REST.
+	conn, err := grpc.NewClient("127.0.0.1:"+grpcPort, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	oc := orderv1.NewOrderServiceClient(conn)
+	gctx, gcancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer gcancel()
+	params, _ := structpb.NewStruct(map[string]any{"name": "e2e-grpc"})
+	g, err := oc.CreateOrder(gctx, &orderv1.CreateOrderRequest{Template: "native-vm-labda-vsphere", ManagementCluster: "machinery", Parameters: params})
+	if err != nil {
+		t.Fatalf("gRPC create: %v", err)
+	}
+	ws, err := oc.WatchOrders(gctx, &orderv1.WatchOrdersRequest{OrderId: g.GetId(), UntilPhases: []string{"PROpen"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var last *orderv1.OrderEvent
+	for {
+		ev, err := ws.Recv()
+		if err != nil {
+			break
+		}
+		last = ev
+	}
+	if last == nil || last.GetOrder().GetPhase() != "PROpen" || last.GetOrder().GetPullRequest().GetNumber() != 2 {
+		t.Fatalf("gRPC watch ended with %v", last)
+	}
+	var viaREST v1alpha1.Order
+	if resp, err := http.Get(base + "/api/v1/orders/" + g.GetId()); err == nil {
+		_ = json.NewDecoder(resp.Body).Decode(&viaREST)
+		_ = resp.Body.Close()
+	}
+	if viaREST.Status.Phase != v1alpha1.PhasePROpen {
+		t.Errorf("REST sees the gRPC order as %q", viaREST.Status.Phase)
+	}
+
 	resp, err = http.Get(base + "/ui/")
 	if err != nil || resp.StatusCode != 200 {
 		t.Fatalf("ui: %v %v", resp, err)

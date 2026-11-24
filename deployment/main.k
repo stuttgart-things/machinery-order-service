@@ -12,6 +12,7 @@ import deploy
 import service
 import ingress
 import httproute
+import grpcroute
 import managementclusters
 
 _manifests = [m for m in [
@@ -26,6 +27,7 @@ _manifests = [m for m in [
     service.service
     ingress.ingress
     httproute.httproute
+    grpcroute.grpcroute
 ] + managementclusters.managementClusters if m]
 
 k8s.yaml_stream(_manifests)

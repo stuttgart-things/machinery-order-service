@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
+	"google.golang.org/grpc"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -25,6 +27,7 @@ import (
 	"github.com/stuttgart-things/machinery-order-service/internal/controller"
 	"github.com/stuttgart-things/machinery-order-service/internal/delivery"
 	"github.com/stuttgart-things/machinery-order-service/internal/ghauth"
+	"github.com/stuttgart-things/machinery-order-service/internal/grpcapi"
 	"github.com/stuttgart-things/machinery-order-service/internal/machinery"
 	"github.com/stuttgart-things/machinery-order-service/internal/render"
 	"github.com/stuttgart-things/machinery-order-service/internal/web"
@@ -103,6 +106,39 @@ func (a apiRunnable) Start(ctx context.Context) error {
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
+		return err
+	}
+}
+
+// grpcRunnable serves the gRPC API on every replica, leader or not.
+type grpcRunnable struct {
+	srv  *grpc.Server
+	addr string
+}
+
+func (g grpcRunnable) NeedLeaderElection() bool { return false }
+
+func (g grpcRunnable) Start(ctx context.Context) error {
+	lis, err := net.Listen("tcp", g.addr)
+	if err != nil {
+		return fmt.Errorf("gRPC: %w", err)
+	}
+	errc := make(chan error, 1)
+	go func() { errc <- g.srv.Serve(lis) }()
+	slog.Info("gRPC API listening", "addr", g.addr)
+	select {
+	case <-ctx.Done():
+		// Watches never end on their own: give unary calls a moment, then
+		// cut the rest.
+		stopped := make(chan struct{})
+		go func() { g.srv.GracefulStop(); close(stopped) }()
+		select {
+		case <-stopped:
+		case <-time.After(5 * time.Second):
+			g.srv.Stop()
+		}
+		return nil
+	case err := <-errc:
 		return err
 	}
 }
@@ -202,6 +238,9 @@ func serve(ctx context.Context) error {
 	if err := mgr.Add(apiRunnable{srv: &http.Server{
 		Addr: ":" + env("PORT", "8080"), Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second,
 	}}); err != nil {
+		return err
+	}
+	if err := mgr.Add(grpcRunnable{srv: grpcapi.New(srv), addr: ":" + env("GRPC_PORT", "9090")}); err != nil {
 		return err
 	}
 	slog.Info("starting", "namespace", ns, "claimAPI", renderer.BaseURL, "github", apiURL, "basePath", basePath, "auth", authn != nil)
