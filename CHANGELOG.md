@@ -1,3 +1,11 @@
+# [0.8.0](https://github.com/stuttgart-things/machinery-order-service/compare/v0.7.0...v0.8.0) (2026-11-24)
+
+
+### Features
+
+* gRPC API for orders ([#24](https://github.com/stuttgart-things/machinery-order-service/issues/24)) ([0fd8bce](https://github.com/stuttgart-things/machinery-order-service/commit/0fd8bce5982337c785b516d88eadbb003a1af3d6))
+* maximum lifetime for auto-merge orders ([#27](https://github.com/stuttgart-things/machinery-order-service/issues/27)) ([b58453e](https://github.com/stuttgart-things/machinery-order-service/commit/b58453e5cbda343e48a98e3712876aec39a02f9b))
+
 # [0.7.0](https://github.com/stuttgart-things/machinery-order-service/compare/v0.6.0...v0.7.0) (2026-11-23)
 
 
