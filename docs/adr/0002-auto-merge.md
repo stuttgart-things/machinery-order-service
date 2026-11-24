@@ -55,6 +55,23 @@ The rules live in git with the cluster's other settings. Changing them is a revi
 - Condition `AutoMerge` (`Waiting`, `ChecksFailed`, `RuleGone`, `NotMergeable`, `Merged`) and the history show what happened. After the merge the order follows the usual path (Merged, Applied, …).
 - A human can still merge or close the PR at any time. Cancelling works as before.
 
+**Maximum lifetime (#27):** a rule may set `maxLifetime` (a duration such as `1h`), so test VMs whose runner died do not stay on shared hardware:
+
+```yaml
+       rules:
+         - name: persona-test-vms
+           groups: [group:default/ai-personas]
+           actions: [order, teardown]   # maxLifetime needs teardown
+           maxLifetime: 1h
+```
+
+- The CRD refuses `maxLifetime` on a rule without the `teardown` action: the expiry teardown is merged under the same rule, nobody watches it.
+- At intake an order under such a rule gets `spec.autoMerge.expiresAt` = intake time + `maxLifetime`. It is fixed with the rule name (immutable); changing the rule later does not move it. `kubectl get orders -o wide` shows it (`Expires`), the UI shows it in the order detail, and `status.message` ends in `(expires …)` until then.
+- The controller requeues the order to `expiresAt`. Then, whatever phase the order is in:
+  - before the merge (`Ordered`, `Placed`, `PROpen`): it is cancelled, the pull request closed. The message starts with `expired:`.
+  - after the merge (`Merged`, `Applied`, `Building`, `Ready`, `Deleted`): the service asks for a teardown itself (`spec.teardown.requestedBy: service:machinery-order-service`, reason `expired: …`), auto-merged under the order's rule while it still allows teardowns, else a human merges. An order still `Building` is torn down as well; waiting for `Ready` would leave a VM that never becomes Ready.
+  - an order whose teardown was asked for already (by the runner, a person or a previous expiry) is left alone, also when that teardown was withdrawn: a human closed it on purpose.
+
 `GET /api/v1/management-clusters` lists each cluster's rules. Personas and people can see what they may auto-merge without guessing.
 
 ## Consequences
@@ -62,4 +79,4 @@ The rules live in git with the cluster's other settings. Changing them is a revi
 - Persona scenarios run in one go when their persona's group has a rule, and the scenario asks for it (ai-personas: `merge: auto`). Scenarios with `merge: human` still test the human path.
 - The service's GitHub identity needs to read check runs and statuses, and to merge (`contents: write`, `checks: read`, `statuses: read`).
 - No rule is configured by default. Turning it on for a cluster is a change in the fleet repo (stuttgart-things).
-- Out of scope: auto-merge of changes and deletions (only orders exist here), and time windows or quotas per rule. A limit on open auto-merge orders per orderer can follow if needed.
+- Out of scope: auto-merge of changes (only orders and teardowns exist here), and time windows or quotas per rule. A limit on open auto-merge orders per orderer can follow if needed.

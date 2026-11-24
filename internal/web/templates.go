@@ -155,6 +155,7 @@ const detailBodyDef = `{{define "body"}}{{with .Order}}
     <dt>Management cluster</dt><dd>{{.Spec.Placement.ManagementCluster}}</dd>
     {{with .Spec.RequestedBy}}<dt>Requested by</dt><dd><code>{{.}}</code></dd>{{end}}
     {{with .Spec.Reason}}<dt>Reason</dt><dd>{{.}}</dd>{{end}}
+    {{with .Spec.AutoMerge}}<dt>Auto-merge</dt><dd>rule <code>{{.Rule}}</code></dd>{{with .ExpiresAt}}<dt>Expires</dt><dd>{{.UTC.Format "2006-01-02 15:04:05"}} UTC <span class="muted">torn down by the service when it runs out</span></dd>{{end}}{{end}}
     {{with .Status.Delivery}}
       {{with .PullRequest}}<dt>Pull request</dt><dd><a href="{{.URL}}" target="_blank" rel="noopener">#{{.Number}}</a> <span class="muted">{{.State}}</span></dd>{{end}}
       {{with .Branch}}<dt>Branch</dt><dd><code>{{.}}</code></dd>{{end}}

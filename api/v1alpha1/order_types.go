@@ -1,6 +1,8 @@
 package v1alpha1
 
 import (
+	"time"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -217,6 +219,25 @@ type OrderAutoMerge struct {
 	// Rule is the name of the ManagementCluster's auto-merge rule.
 	// +kubebuilder:validation:MinLength=1
 	Rule string `json:"rule"`
+	// ExpiresAt is when the order runs out: intake time plus the rule's
+	// maxLifetime, fixed at intake. The controller then tears the order down
+	// (or cancels it before the merge). Unset: no limit.
+	// +optional
+	ExpiresAt *metav1.Time `json:"expiresAt,omitempty"`
+}
+
+// ExpiresAt is when the order runs out, nil when it does not.
+func (o *Order) ExpiresAt() *metav1.Time {
+	if am := o.Spec.AutoMerge; am != nil {
+		return am.ExpiresAt
+	}
+	return nil
+}
+
+// ExpiredAt reports whether the order ran out by now.
+func (o *Order) ExpiredAt(now time.Time) bool {
+	e := o.ExpiresAt()
+	return e != nil && !now.Before(e.Time)
 }
 
 // RenderedFile is one file of the rendered order.
@@ -362,6 +383,7 @@ type OrderStatus struct {
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="PR",type=string,JSONPath=`.status.delivery.pullRequest.url`,priority=1
 // +kubebuilder:printcolumn:name="Requested-By",type=string,JSONPath=`.spec.requestedBy`,priority=1
+// +kubebuilder:printcolumn:name="Expires",type=date,JSONPath=`.spec.autoMerge.expiresAt`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 type Order struct {
 	metav1.TypeMeta   `json:",inline"`

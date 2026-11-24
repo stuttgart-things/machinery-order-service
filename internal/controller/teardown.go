@@ -83,8 +83,12 @@ func (r *OrderReconciler) startTeardown(ctx context.Context, o *v1alpha1.Order) 
 		Kustomizations: res.Kustomizations,
 	}
 	o.Status.Teardown = ts
-	r.setTeardown(o, metav1.ConditionUnknown, "PROpen", "teardown pull request "+res.PRURL)
-	SetPhase(o, v1alpha1.PhaseTeardownPROpen, "teardown pull request "+res.PRURL)
+	msg := "teardown pull request " + res.PRURL
+	if t.RequestedBy == ServiceRequester {
+		msg += " (" + t.Reason + ")"
+	}
+	r.setTeardown(o, metav1.ConditionUnknown, "PROpen", msg)
+	SetPhase(o, v1alpha1.PhaseTeardownPROpen, msg)
 	return ctrl.Result{RequeueAfter: r.PRPoll}, nil
 }
 

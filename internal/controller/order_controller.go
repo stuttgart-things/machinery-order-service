@@ -5,6 +5,9 @@
 //	                     └→ Cancelled (cancel, or the PR closed unmerged)
 //	Failed: the order cannot go on as it is (bad parameters, a taken name)
 //
+// An order with spec.autoMerge.expiresAt (the rule's maxLifetime, #27) is
+// cancelled when it runs out before its merge, and torn down after it.
+//
 // A teardown (spec.teardown, docs/adr/0003-teardown.md) opens a
 // delete-claim pull request; the fleet repo deletes the XR after its merge:
 //
@@ -127,11 +130,19 @@ func (r *OrderReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		}
 	}
 
+	if changed, err := r.expire(ctx, o); err != nil || changed {
+		// The spec update brings the order back with the teardown.
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
 	before := o.Status.DeepCopy()
 	res, err := r.step(ctx, o)
 	o.Status.ObservedGeneration = o.Generation
 	if err != nil {
 		o.Status.Message = err.Error()
+	} else {
+		withExpiry(o)
+		res = untilExpiry(o, res)
 	}
 	if !equality.Semantic.DeepEqual(before, &o.Status) {
 		if uerr := r.Status().Update(ctx, o); uerr != nil {
@@ -197,8 +208,8 @@ func (r *OrderReconciler) step(ctx context.Context, o *v1alpha1.Order) (ctrl.Res
 func (r *OrderReconciler) advance(ctx context.Context, o *v1alpha1.Order) (ctrl.Result, error) {
 	switch o.Status.Phase {
 	case v1alpha1.PhaseOrdered:
-		if o.Spec.Cancel {
-			SetPhase(o, v1alpha1.PhaseCancelled, "cancelled before the delivery")
+		if why := cancelNote(o); why != "" {
+			SetPhase(o, v1alpha1.PhaseCancelled, why+" before the delivery")
 			return ctrl.Result{}, nil
 		}
 		mc, err := r.cluster(ctx, o.Spec.Placement.ManagementCluster)
@@ -219,8 +230,8 @@ func (r *OrderReconciler) advance(ctx context.Context, o *v1alpha1.Order) (ctrl.
 		return ctrl.Result{}, nil
 
 	case v1alpha1.PhasePlaced:
-		if o.Spec.Cancel {
-			SetPhase(o, v1alpha1.PhaseCancelled, "cancelled before the delivery")
+		if why := cancelNote(o); why != "" {
+			SetPhase(o, v1alpha1.PhaseCancelled, why+" before the delivery")
 			return ctrl.Result{}, nil
 		}
 		return r.deliver(ctx, o)
@@ -346,12 +357,12 @@ func (r *OrderReconciler) followPR(ctx context.Context, o *v1alpha1.Order) (ctrl
 		SetPhase(o, v1alpha1.PhasePlaced, "pull request unknown, delivering again")
 		return ctrl.Result{}, nil
 	}
-	if o.Spec.Cancel {
+	if why := cancelNote(o); why != "" {
 		if err := r.Git.Close(ctx, d.Repository, d.PullRequest.Number, d.Branch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("closing the pull request: %w", err)
 		}
 		d.PullRequest.State = "closed"
-		SetPhase(o, v1alpha1.PhaseCancelled, "cancelled: pull request closed")
+		SetPhase(o, v1alpha1.PhaseCancelled, why+": pull request closed")
 		return ctrl.Result{}, nil
 	}
 	pr, err := r.Git.PullRequest(ctx, d.Repository, d.PullRequest.Number)
