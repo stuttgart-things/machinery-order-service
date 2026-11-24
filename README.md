@@ -98,8 +98,9 @@ Group `order.machinery.stuttgart-things.com/v1alpha1`, CRDs in
 - **Order** (namespaced, name = order ID `ord-<12 hex>`): `template`,
   `parameters`, `placement.managementCluster`, `requestedBy`,
   `requestedByGroups` (the orderer's groups at intake, for grouping in the UI), `reason`,
-  `cancel`, `rendered` (set by the API at intake), `autoMerge.rule` (set at
-  intake when the order asked for auto-merge and a rule allowed it) and
+  `cancel`, `rendered` (set by the API at intake), `autoMerge.{rule, expiresAt}` (set at
+  intake when the order asked for auto-merge and a rule allowed it;
+  `expiresAt` when the rule has a `maxLifetime`) and
   `teardown.{attempt, requestedBy, requestedAt, reason, autoMerge.rule}` (set
   by the teardown endpoint).
   Template, placement, rendered and autoMerge are immutable.
@@ -109,8 +110,8 @@ Group `order.machinery.stuttgart-things.com/v1alpha1`, CRDs in
   templates; empty = `CLAIM_API_URL`, e.g. for a staging cluster),
   `machinery.{endpoint, insecure, tokenSecretRef}`,
   `flux.{name, namespace, kind, revisionField}`,
-  `autoMerge.{method, rules[].{name, users, groups, templates, parameters, parameterPrefixes, actions}}`
-  (`actions`: `order`, `teardown`; empty = `[order]`),
+  `autoMerge.{method, rules[].{name, users, groups, templates, parameters, parameterPrefixes, actions, maxLifetime}}`
+  (`actions`: `order`, `teardown`; empty = `[order]`; `maxLifetime` needs `teardown`),
   `cordoned`.
 
 The live side comes from machinery's gRPC `GetResourceDetail` (kind + name of
@@ -165,7 +166,13 @@ no checks at all after a minute counts as passed). A failed check, a rule
 that was removed or narrowed, or a PR GitHub will not merge leaves it to a
 human; condition `AutoMerge` says why. While the PR is open, `status.message`
 shows the same state (`pull request <url>; auto-merge: waiting for checks: …`),
-so clients that only read the message (claims) see it too. Decision and limits:
+so clients that only read the message (claims) see it too.
+
+A rule with `maxLifetime: 1h` (and `actions: [order, teardown]`) limits how
+long its orders live: the intake sets `spec.autoMerge.expiresAt`, and when it
+is reached the service cancels the order (before the merge) or tears it down
+itself (after it, reason `expired: …`, auto-merged under the rule). So test VMs
+whose runner died do not stay on shared hardware. Decision and limits:
 [ADR 0002](docs/adr/0002-auto-merge.md).
 
 ## Deployment

@@ -102,11 +102,14 @@ type AutoMerge struct {
 	// +optional
 	// +listType=map
 	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=64
 	Rules []AutoMergeRule `json:"rules,omitempty"`
 }
 
 // AutoMergeRule allows auto-merge for some orderers, templates and
 // parameter values.
+//
+// +kubebuilder:validation:XValidation:rule="!has(self.maxLifetime) || (has(self.actions) && 'teardown' in self.actions)",message="maxLifetime needs the teardown action: an expired order is torn down under the rule"
 type AutoMergeRule struct {
 	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
@@ -134,7 +137,15 @@ type AutoMergeRule struct {
 	// Empty = [order].
 	// +optional
 	// +listType=set
+	// +kubebuilder:validation:MaxItems=2
 	Actions []AutoMergeAction `json:"actions,omitempty"`
+	// MaxLifetime limits how long an order under the rule lives, e.g. 1h for
+	// throwaway test VMs (#27). The intake records the expiry in
+	// spec.autoMerge.expiresAt; once it is reached the service tears the
+	// order down (cancels it before the merge) and merges the teardown under
+	// this rule. Needs the teardown action.
+	// +optional
+	MaxLifetime *metav1.Duration `json:"maxLifetime,omitempty"`
 }
 
 // AutoMergeAction is what a rule lets the service merge.

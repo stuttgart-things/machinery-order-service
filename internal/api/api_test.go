@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -356,8 +357,32 @@ func TestAutoMergeIntake(t *testing.T) {
 	if code != 201 {
 		t.Fatalf("allowed: %d %v", code, out)
 	}
-	if am, _ := out["spec"].(map[string]any)["autoMerge"].(map[string]any); am["rule"] != "personas" {
+	if am, _ := out["spec"].(map[string]any)["autoMerge"].(map[string]any); am["rule"] != "personas" || am["expiresAt"] != nil {
 		t.Errorf("spec.autoMerge %v", out["spec"])
+	}
+
+	// #27: a rule with maxLifetime gives the order an expiry.
+	mc := &v1alpha1.ManagementCluster{}
+	if err := s.c.Get(context.Background(), client.ObjectKey{Name: "machinery"}, mc); err != nil {
+		t.Fatal(err)
+	}
+	mc.Spec.AutoMerge.Rules[0].MaxLifetime = &metav1.Duration{Duration: time.Hour}
+	if err := s.c.Update(context.Background(), mc); err != nil {
+		t.Fatal(err)
+	}
+	before := time.Now()
+	code, out = order(alice, "small", true)
+	if code != 201 {
+		t.Fatalf("with maxLifetime: %d %v", code, out)
+	}
+	am, _ := out["spec"].(map[string]any)["autoMerge"].(map[string]any)
+	exp, err := time.Parse(time.RFC3339, fmt.Sprint(am["expiresAt"]))
+	if err != nil || exp.Before(before.Add(time.Hour-time.Second)) || exp.After(time.Now().Add(time.Hour)) {
+		t.Errorf("expiresAt %v (%v)", am["expiresAt"], err)
+	}
+	mc.Spec.AutoMerge.Rules[0].MaxLifetime = nil
+	if err := s.c.Update(context.Background(), mc); err != nil {
+		t.Fatal(err)
 	}
 	// The orderer's groups are recorded, for grouping in the UI.
 	if g, _ := out["spec"].(map[string]any)["requestedByGroups"].([]any); len(g) != 1 || g[0] != "group:default/ai-personas" {

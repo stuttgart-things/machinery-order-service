@@ -449,6 +449,12 @@ func (s *Server) Create(ctx context.Context, c *Caller, req CreateRequest) (int,
 				"auto-merge not allowed on %s: %s. Order without autoMerge and a human merges (rules: GET /api/v1/management-clusters)", mc.Name, why)}
 		}
 		o.Spec.AutoMerge = &v1alpha1.OrderAutoMerge{Rule: rule.Name}
+		if ml := rule.MaxLifetime; ml != nil && ml.Duration > 0 {
+			// The rule's lifetime counts from the intake; the controller
+			// tears the order down once it is over (#27).
+			exp := metav1.NewTime(time.Now().Add(ml.Duration).Truncate(time.Second))
+			o.Spec.AutoMerge.ExpiresAt = &exp
+		}
 	}
 	if err := s.Client.Create(ctx, o); err != nil {
 		return http.StatusInternalServerError, ErrorResponse{Error: err.Error()}

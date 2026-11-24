@@ -34,6 +34,10 @@ spec:
       name: Requested-By
       priority: 1
       type: string
+    - jsonPath: .spec.autoMerge.expiresAt
+      name: Expires
+      priority: 1
+      type: date
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -72,6 +76,13 @@ spec:
                   request itself and a rule of the ManagementCluster allowed it at intake
                   (docs/adr/0002-auto-merge.md). Unset: a human merges.
                 properties:
+                  expiresAt:
+                    description: |-
+                      ExpiresAt is when the order runs out: intake time plus the rule's
+                      maxLifetime, fixed at intake. The controller then tears the order down
+                      (or cancels it before the merge). Unset: no limit.
+                    format: date-time
+                    type: string
                   rule:
                     description: Rule is the name of the ManagementCluster's auto-merge
                       rule.
@@ -188,6 +199,13 @@ spec:
                       AutoMerge names the rule that allowed the service to merge the
                       teardown pull request itself. Unset: a human merges.
                     properties:
+                      expiresAt:
+                        description: |-
+                          ExpiresAt is when the order runs out: intake time plus the rule's
+                          maxLifetime, fixed at intake. The controller then tears the order down
+                          (or cancels it before the merge). Unset: no limit.
+                        format: date-time
+                        type: string
                       rule:
                         description: Rule is the name of the ManagementCluster's auto-merge
                           rule.

@@ -89,6 +89,7 @@ spec:
                             - order
                             - teardown
                             type: string
+                          maxItems: 2
                           type: array
                           x-kubernetes-list-type: set
                         groups:
@@ -96,6 +97,14 @@ spec:
                           items:
                             type: string
                           type: array
+                        maxLifetime:
+                          description: |-
+                            MaxLifetime limits how long an order under the rule lives, e.g. 1h for
+                            throwaway test VMs (#27). The intake records the expiry in
+                            spec.autoMerge.expiresAt; once it is reached the service tears the
+                            order down (cancels it before the merge) and merges the teardown under
+                            this rule. Needs the teardown action.
+                          type: string
                         name:
                           minLength: 1
                           type: string
@@ -133,6 +142,12 @@ spec:
                       required:
                       - name
                       type: object
+                      x-kubernetes-validations:
+                      - message: 'maxLifetime needs the teardown action: an expired
+                          order is torn down under the rule'
+                        rule: '!has(self.maxLifetime) || (has(self.actions) && ''teardown''
+                          in self.actions)'
+                    maxItems: 64
                     type: array
                     x-kubernetes-list-map-keys:
                     - name

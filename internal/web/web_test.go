@@ -341,3 +341,15 @@ func TestAllOrdersByGroup(t *testing.T) {
 		t.Error("non-admin all view: want own + team-owned only")
 	}
 }
+
+// #27: the detail shows the auto-merge rule and when the order runs out.
+func TestDetailShowsExpiry(t *testing.T) {
+	o := order("ord-x", "user:default/alice", v1alpha1.PhaseReady)
+	exp := metav1.NewTime(time.Date(2026, 11, 24, 13, 0, 0, 0, time.UTC))
+	o.Spec.AutoMerge = &v1alpha1.OrderAutoMerge{Rule: "persona-test-vms", ExpiresAt: &exp}
+	h, _ := handler(t, nil, o)
+	code, body := get(t, h, "/orders/ui/orders/ord-x", nil)
+	if code != 200 || !strings.Contains(body, "<code>persona-test-vms</code>") || !strings.Contains(body, "2026-11-24 13:00:00 UTC") {
+		t.Errorf("%d\n%s", code, body)
+	}
+}
