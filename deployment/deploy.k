@@ -36,6 +36,7 @@ deployment = {
                     args: ["serve"]
                     ports: [
                         {name: "http", containerPort: config.containerPort, protocol: "TCP"}
+                        {name: "grpc", containerPort: config.grpcPort, protocol: "TCP"}
                         {name: "metrics", containerPort: config.metricsPort, protocol: "TCP"}
                         {name: "probes", containerPort: config.probePort, protocol: "TCP"}
                     ]

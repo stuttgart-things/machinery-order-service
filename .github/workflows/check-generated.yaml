@@ -20,12 +20,20 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - name: deepcopy, CRDs, RBAC and deployment/generated are up to date
+      - name: protoc
+        run: sudo apt-get update -q && sudo apt-get install -y -q protobuf-compiler
+      - name: deepcopy, CRDs, RBAC, deployment/generated and gRPC code are up to date
         run: |
           go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.23.0 object paths=./api/...
           go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.23.0 crd paths=./api/... output:crd:artifacts:config=config/crd
           go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.23.0 rbac:roleName=machinery-order-service paths=./internal/controller/... output:rbac:artifacts:config=config/rbac
           cp config/crd/*.yaml config/rbac/role.yaml deployment/generated/
-          git diff --exit-code
+          GOBIN="$PWD/bin" go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
+          GOBIN="$PWD/bin" go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
+          PATH="$PWD/bin:$PATH" protoc -I api/proto --go_out=api/proto --go_opt=paths=source_relative --go-grpc_out=api/proto --go-grpc_opt=paths=source_relative api/proto/order/v1/order.proto
+          # The protoc version in the generated headers may differ from the
+          # one that generated the committed code; nothing else may.
+          git diff --exit-code -I '^//[[:space:]-]+protoc[[:space:]]+v'
+          test -z "$(git status --porcelain)"
       - name: gofmt
         run: test -z "$(gofmt -l .)"

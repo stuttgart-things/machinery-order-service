@@ -1,0 +1,233 @@
+// The gRPC API of machinery-order-service (#24). It does what the REST API
+// does (internal/api): the same validation, visibility (ADR 0001),
+// auto-merge rules (ADR 0002) and teardown (ADR 0003). Every call needs a
+// ZITADEL bearer token in the "authorization" metadata when auth is on;
+// requested_by always comes from the token.
+//
+// Go code: `task generate` (protoc with protoc-gen-go and
+// protoc-gen-go-grpc at the versions pinned in Taskfile.yaml).
+syntax = "proto3";
+
+package order.v1;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/stuttgart-things/machinery-order-service/api/proto/order/v1;orderv1";
+
+service OrderService {
+  // CreateOrder renders the order with the caller's token and creates it
+  // (POST /api/v1/orders).
+  rpc CreateOrder(CreateOrderRequest) returns (Order);
+  // GetOrder returns one order with its rendered files
+  // (GET /api/v1/orders/{id}).
+  rpc GetOrder(GetOrderRequest) returns (Order);
+  // ListOrders returns the orders the caller may see, newest first, without
+  // rendered files (GET /api/v1/orders).
+  rpc ListOrders(ListOrdersRequest) returns (ListOrdersResponse);
+  // WatchOrders streams order changes (GET /api/v1/orders/watch). With
+  // order_id it follows one order and ends once it reaches one of
+  // until_phases, a terminal phase, or is deleted.
+  rpc WatchOrders(WatchOrdersRequest) returns (stream OrderEvent);
+  // CancelOrder withdraws an order before its merge
+  // (POST /api/v1/orders/{id}/cancel).
+  rpc CancelOrder(CancelOrderRequest) returns (Order);
+  // TeardownOrder asks to remove what a merged order built
+  // (POST /api/v1/orders/{id}/teardown).
+  rpc TeardownOrder(TeardownOrderRequest) returns (Order);
+  // ListManagementClusters lists where orders can go
+  // (GET /api/v1/management-clusters).
+  rpc ListManagementClusters(ListManagementClustersRequest) returns (ListManagementClustersResponse);
+}
+
+message CreateOrderRequest {
+  string template = 1;
+  string management_cluster = 2;
+  google.protobuf.Struct parameters = 3;
+  string reason = 4;
+  // auto_merge asks the service to merge the pull request once its checks
+  // pass; PermissionDenied unless a rule of the cluster allows it.
+  bool auto_merge = 5;
+}
+
+message GetOrderRequest {
+  string id = 1;
+}
+
+// OrderFilter selects orders, as the REST query parameters do.
+message OrderFilter {
+  // mine keeps the caller's own orders (needs a login).
+  bool mine = 1;
+  string phase = 2;
+  string cluster = 3;
+}
+
+message ListOrdersRequest {
+  OrderFilter filter = 1;
+}
+
+message ListOrdersResponse {
+  repeated Order orders = 1;
+}
+
+message WatchOrdersRequest {
+  OrderFilter filter = 1;
+  // order_id follows one order only.
+  string order_id = 2;
+  // send_initial sends the matching orders as they are now (type ADDED),
+  // then an event of type SYNCED, then the changes.
+  bool send_initial = 3;
+  // resource_version resumes a watch: with send_initial, only orders changed
+  // after it are sent first. Deletions while the client was away are not
+  // replayed.
+  string resource_version = 4;
+  // until_phases end a watch on order_id once the order reaches one of them
+  // (e.g. PROpen). Cancelled and Failed always end it. An order that is
+  // there already is sent once and the watch ends.
+  repeated string until_phases = 5;
+}
+
+message OrderEvent {
+  // type is ADDED, MODIFIED, DELETED, or SYNCED (after the initial orders).
+  string type = 1;
+  Order order = 2;
+}
+
+message CancelOrderRequest {
+  string id = 1;
+  // resource_version, when set, must still be the order's (Aborted
+  // otherwise).
+  string resource_version = 2;
+}
+
+message TeardownOrderRequest {
+  string id = 1;
+  string reason = 2;
+  // auto_merge asks the service to merge the teardown pull request; only for
+  // the orderer and when a rule allows teardowns.
+  bool auto_merge = 3;
+  string resource_version = 4;
+}
+
+message ListManagementClustersRequest {}
+
+message ListManagementClustersResponse {
+  repeated ManagementCluster clusters = 1;
+}
+
+message ManagementCluster {
+  string name = 1;
+  string lab = 2;
+  bool cordoned = 3;
+  string repository = 4;
+  string orders_path = 5;
+  // auto_merge_rules lists who may auto-merge what.
+  repeated AutoMergeRule auto_merge_rules = 6;
+  string auto_merge_method = 7;
+}
+
+message AutoMergeRule {
+  string name = 1;
+  repeated string users = 2;
+  repeated string groups = 3;
+  repeated string templates = 4;
+  map<string, StringList> parameters = 5;
+  map<string, StringList> parameter_prefixes = 6;
+  repeated string actions = 7;
+}
+
+message StringList {
+  repeated string values = 1;
+}
+
+// Order is the Order resource, flattened.
+message Order {
+  string id = 1;
+  string resource_version = 2;
+  google.protobuf.Timestamp created_at = 3;
+
+  string template = 4;
+  string management_cluster = 5;
+  // parameters as the orderer gave them.
+  google.protobuf.Struct parameters = 6;
+  string requested_by = 7;
+  repeated string requested_by_groups = 8;
+  string reason = 9;
+  // auto_merge_rule is the rule that allowed the auto-merge, if any.
+  string auto_merge_rule = 10;
+  bool cancel = 11;
+  Teardown teardown = 12;
+
+  string phase = 13;
+  string message = 14;
+  PullRequest pull_request = 15;
+  XRRef xr_ref = 16;
+  Live live = 17;
+  repeated PhaseTransition history = 18;
+  repeated Condition conditions = 19;
+  // files are the repository paths the order writes.
+  repeated string files = 20;
+  // rendered is only set by GetOrder.
+  Rendered rendered = 21;
+}
+
+message Teardown {
+  int32 attempt = 1;
+  string requested_by = 2;
+  string reason = 3;
+  string auto_merge_rule = 4;
+  // outcome is empty while it runs, else Withdrawn, Failed or Deleted.
+  string outcome = 5;
+  PullRequest pull_request = 6;
+}
+
+message PullRequest {
+  int32 number = 1;
+  string url = 2;
+  // state is open, closed or merged.
+  string state = 3;
+  string merge_sha = 4;
+}
+
+message XRRef {
+  string api_version = 1;
+  string kind = 2;
+  string name = 3;
+  string namespace = 4;
+}
+
+message Live {
+  bool found = 1;
+  bool ready = 2;
+  string status_message = 3;
+  string address = 4;
+  map<string, string> info = 5;
+  google.protobuf.Timestamp observed_at = 6;
+  google.protobuf.Timestamp last_seen_at = 7;
+}
+
+message PhaseTransition {
+  string phase = 1;
+  google.protobuf.Timestamp time = 2;
+  string message = 3;
+}
+
+message Condition {
+  string type = 1;
+  string status = 2;
+  string reason = 3;
+  string message = 4;
+  google.protobuf.Timestamp last_transition_time = 5;
+}
+
+message Rendered {
+  // parameters sent to claim-machinery-api, defaults included.
+  google.protobuf.Struct parameters = 1;
+  repeated RenderedFile files = 2;
+  google.protobuf.Timestamp rendered_at = 3;
+}
+
+message RenderedFile {
+  string path = 1;
+  string content = 2;
+}

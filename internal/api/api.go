@@ -91,6 +91,10 @@ type TeardownRequest struct {
 	RequestedBy string `json:"requestedBy,omitempty"`
 }
 
+// ErrChanged is the error of a 409 because the order moved since the caller
+// read it (resourceVersion); other 409s refuse the request as such.
+const ErrChanged = "the order changed since it was read; reload and try again"
+
 // ErrorResponse is every error body; Fields name what is wrong per
 // parameter.
 type ErrorResponse struct {
@@ -177,12 +181,25 @@ type Caller struct {
 // Authorize checks the request. ui=true also accepts sthings-portal's
 // forwarded identity (only for the web UI). It writes the error itself.
 func (s *Server) Authorize(w http.ResponseWriter, r *http.Request, ui bool) (*Caller, bool) {
+	c, status, err := s.Identify(r, ui)
+	if err != nil {
+		slog.Info("auth refused", "path", r.URL.Path, "status", status, "error", err)
+		writeError(w, status, err.Error())
+		return nil, false
+	}
+	return c, true
+}
+
+// Identify checks the request's credentials, as Authorize, and returns the
+// HTTP status of a refusal instead of writing it. The gRPC API calls it with
+// the token of its metadata.
+func (s *Server) Identify(r *http.Request, ui bool) (*Caller, int, error) {
 	c := &Caller{}
 	if tok, ok := auth.BearerToken(r); ok {
 		c.Token = tok
 	}
 	if s.Auth == nil {
-		return c, true
+		return c, http.StatusOK, nil
 	}
 	var id auth.Identity
 	var err error
@@ -199,17 +216,14 @@ func (s *Server) Authorize(w http.ResponseWriter, r *http.Request, ui bool) (*Ca
 		case errors.Is(err, auth.ErrUnavailable):
 			status = http.StatusServiceUnavailable
 		}
-		slog.Info("auth refused", "path", r.URL.Path, "status", status, "error", err)
-		writeError(w, status, err.Error())
-		return nil, false
+		return nil, status, err
 	}
 	ref, err := id.UserRef()
 	if err != nil {
-		writeError(w, http.StatusForbidden, "the login is not a Backstage user name")
-		return nil, false
+		return nil, http.StatusForbidden, errors.New("the login is not a Backstage user name")
 	}
 	c.ID, c.Ref = &id, ref
-	return c, true
+	return c, http.StatusOK, nil
 }
 
 // MaySee reports whether the caller may see o: anyone without auth; with
@@ -266,7 +280,7 @@ func (s *Server) Teardown(ctx context.Context, c *Caller, id string, req Teardow
 		return http.StatusNotFound, ErrorResponse{Error: "order not found"}
 	}
 	if req.ResourceVersion != "" && req.ResourceVersion != o.ResourceVersion {
-		return http.StatusConflict, ErrorResponse{Error: "the order changed since it was read; reload and try again"}
+		return http.StatusConflict, ErrorResponse{Error: ErrChanged}
 	}
 	if why := TeardownRefused(o); why != "" {
 		return http.StatusConflict, ErrorResponse{Error: "teardown refused: " + why}
@@ -307,7 +321,7 @@ func (s *Server) Teardown(ctx context.Context, c *Caller, id string, req Teardow
 	}
 	if err := s.Client.Update(ctx, o); err != nil {
 		if apierrors.IsConflict(err) {
-			return http.StatusConflict, ErrorResponse{Error: "the order changed since it was read; reload and try again"}
+			return http.StatusConflict, ErrorResponse{Error: ErrChanged}
 		}
 		return http.StatusInternalServerError, ErrorResponse{Error: err.Error()}
 	}
@@ -677,7 +691,7 @@ func (s *Server) Cancel(ctx context.Context, c *Caller, id, resourceVersion stri
 		return http.StatusNotFound, ErrorResponse{Error: "order not found"}
 	}
 	if resourceVersion != "" && resourceVersion != o.ResourceVersion {
-		return http.StatusConflict, ErrorResponse{Error: "the order changed since it was read; reload and try again"}
+		return http.StatusConflict, ErrorResponse{Error: ErrChanged}
 	}
 	switch {
 	case o.Status.Phase == v1alpha1.PhaseCancelled:
@@ -693,7 +707,7 @@ func (s *Server) Cancel(ctx context.Context, c *Caller, id, resourceVersion stri
 	}
 	if err := s.Client.Update(ctx, o); err != nil {
 		if apierrors.IsConflict(err) {
-			return http.StatusConflict, ErrorResponse{Error: "the order changed since it was read; reload and try again"}
+			return http.StatusConflict, ErrorResponse{Error: ErrChanged}
 		}
 		return http.StatusInternalServerError, ErrorResponse{Error: err.Error()}
 	}

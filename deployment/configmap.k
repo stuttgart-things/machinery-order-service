@@ -8,6 +8,7 @@ config = labels.config
 
 _env = {
     PORT: str(config.containerPort)
+    GRPC_PORT: str(config.grpcPort)
     METRICS_ADDR: ":{}".format(config.metricsPort)
     PROBE_ADDR: ":{}".format(config.probePort)
     ORDER_NAMESPACE: config.namespace
