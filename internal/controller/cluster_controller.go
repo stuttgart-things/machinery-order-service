@@ -11,16 +11,19 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	"github.com/stuttgart-things/machinery-order-service/api/v1alpha1"
+	"github.com/stuttgart-things/machinery-order-service/internal/capabilities"
 	"github.com/stuttgart-things/machinery-order-service/internal/clusterhealth"
 	"github.com/stuttgart-things/machinery-order-service/internal/machinery"
 )
 
 // ClusterReconciler checks each ManagementCluster through machinery and
-// writes the result to its status (#31). It only reads: like the order
-// controller it has no kubeconfig for the cluster and changes nothing on it.
+// writes the result to its status: health (#31) and capabilities (#32). It
+// only reads: like the order controller it has no kubeconfig for the cluster
+// and changes nothing on it.
 type ClusterReconciler struct {
 	client.Client
 	// APIReader reads Secrets uncached.
@@ -68,6 +71,17 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	before := mc.Status.DeepCopy()
 	for _, c := range conds {
 		meta.SetStatusCondition(&mc.Status.Conditions, c)
+	}
+	// Capabilities (#32) only from a machinery that answered; on an error
+	// the last ones stay, ageing out by their observedAt.
+	if cl != nil && meta.IsStatusConditionTrue(mc.Status.Conditions, clusterhealth.MachineryReachable) {
+		caps, err := capabilities.Collect(ctx, cl, time.Now())
+		switch {
+		case err != nil:
+			log.FromContext(ctx).Info("capabilities not collected", "cluster", mc.Name, "error", err.Error())
+		default:
+			mc.Status.Capabilities = caps
+		}
 	}
 	mc.Status.ObservedGeneration = mc.Generation
 	now := metav1.NewTime(time.Now().Truncate(time.Second))

@@ -35,6 +35,7 @@ import (
 	"github.com/stuttgart-things/machinery-order-service/api/v1alpha1"
 	"github.com/stuttgart-things/machinery-order-service/internal/auth"
 	"github.com/stuttgart-things/machinery-order-service/internal/automerge"
+	"github.com/stuttgart-things/machinery-order-service/internal/capabilities"
 	"github.com/stuttgart-things/machinery-order-service/internal/clusterhealth"
 	"github.com/stuttgart-things/machinery-order-service/internal/intake"
 	"github.com/stuttgart-things/machinery-order-service/internal/render"
@@ -460,6 +461,11 @@ func (s *Server) Create(ctx context.Context, c *Caller, req CreateRequest) (int,
 		return http.StatusBadGateway, ErrorResponse{Error: err.Error()}
 	}
 	o.Spec.Rendered = rd
+	if xr, err := intake.XRRef(rd); err == nil {
+		if why := capabilities.Check(mc, xr.APIVersion, xr.Kind, time.Now()); why != "" {
+			return http.StatusBadRequest, ErrorResponse{Error: why, Fields: map[string]string{"managementCluster": why}}
+		}
+	}
 	if req.AutoMerge {
 		rule, why := automerge.Find(mc.Spec.AutoMerge, v1alpha1.ActionOrder, requestedBy, requestedByGroups, req.Template, automerge.Params(rd))
 		if rule == nil {
@@ -825,6 +831,8 @@ type ClusterInfo struct {
 	// Conditions are the cluster's health conditions as last checked.
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	CheckedAt  *metav1.Time       `json:"checkedAt,omitempty"`
+	// Capabilities are the kinds and EnvironmentConfigs the cluster has (#32).
+	Capabilities *v1alpha1.Capabilities `json:"capabilities,omitempty"`
 }
 
 // Clusters lists the management clusters, by name.
@@ -844,6 +852,7 @@ func (s *Server) Clusters(ctx context.Context) ([]ClusterInfo, error) {
 			AutoMerge: mc.Spec.AutoMerge,
 			Ready:     string(ready), ReadyMessage: msg,
 			Conditions: mc.Status.Conditions, CheckedAt: mc.Status.CheckedAt,
+			Capabilities: mc.Status.Capabilities,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })

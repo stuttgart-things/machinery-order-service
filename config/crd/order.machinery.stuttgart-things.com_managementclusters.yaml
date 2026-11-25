@@ -270,6 +270,59 @@ spec:
               CrossplaneHealthy and their summary Ready. Ready=False refuses new orders
               like spec.cordoned, as long as CheckedAt is recent.
             properties:
+              capabilities:
+                description: |-
+                  Capabilities is what the cluster can build, as machinery last saw it
+                  (#32). Unset while machinery does not watch the XRDs.
+                properties:
+                  environmentConfigs:
+                    description: |-
+                      EnvironmentConfigs are the names of the cluster's EnvironmentConfigs;
+                      nil while machinery does not watch them. Informational: an XR selects
+                      one by a label value, not by its name.
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  kinds:
+                    description: |-
+                      Kinds are the composite resource kinds the cluster offers (XRDs that
+                      are not Established=False), by kind.
+                    items:
+                      description: OfferedKind is one XRD.
+                      properties:
+                        configuration:
+                          description: |-
+                            Configuration is the package the XRD comes from, if any, and
+                            ConfigurationVersion its tag.
+                          type: string
+                        configurationVersion:
+                          type: string
+                        group:
+                          type: string
+                        kind:
+                          type: string
+                        versions:
+                          description: Versions are the XRD's versions.
+                          items:
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: atomic
+                      required:
+                      - group
+                      - kind
+                      type: object
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  observedAt:
+                    description: |-
+                      ObservedAt is when machinery last answered for them. Older than a
+                      few check intervals, intake does not check against them.
+                    format: date-time
+                    type: string
+                required:
+                - observedAt
+                type: object
               checkedAt:
                 description: |-
                   CheckedAt is when the service last checked the cluster. Older than a

@@ -565,3 +565,66 @@ func TestClusterHealthIntake(t *testing.T) {
 		t.Errorf("unknown cluster message: %q", msg)
 	}
 }
+
+// TestCapabilitiesIntake: an order for a kind the cluster does not offer is
+// refused before its pull request (#32); stale capabilities are not used.
+func TestCapabilitiesIntake(t *testing.T) {
+	s := newSetup(t, false)
+	ctx := context.Background()
+	mc := func(name string, observed time.Duration, kind string) *v1alpha1.ManagementCluster {
+		return &v1alpha1.ManagementCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: name},
+			Status: v1alpha1.ManagementClusterStatus{Capabilities: &v1alpha1.Capabilities{
+				ObservedAt: metav1.NewTime(time.Now().Add(-observed)),
+				Kinds: []v1alpha1.OfferedKind{{Kind: kind, Group: "resources.stuttgart-things.com", Versions: []string{"v1alpha1"},
+					Configuration: "proxmox-vm", ConfigurationVersion: "v0.3.1"}},
+				EnvironmentConfigs: []string{"proxmox-vm-labul"},
+			}},
+		}
+	}
+	for _, c := range []*v1alpha1.ManagementCluster{
+		mc("proxmox-only", time.Minute, "NativeProxmoxVM"),
+		mc("proxmox-stale", time.Hour, "NativeProxmoxVM"),
+		mc("vsphere", time.Minute, "NativeVsphereVM"),
+	} {
+		if err := s.c.Create(ctx, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// rendertest renders a NativeVsphereVM (resources.stuttgart-things.com/v1alpha1).
+	order := func(cluster, name string) (*httptest.ResponseRecorder, map[string]any) {
+		return s.do(t, "POST", "/api/v1/orders", "", map[string]any{
+			"template": "native-vm-labda-vsphere", "managementCluster": cluster, "parameters": map[string]any{"name": name},
+		})
+	}
+	rec, out := order("proxmox-only", "a")
+	want := "NativeVsphereVM.resources.stuttgart-things.com is not installed on proxmox-only (no XRD)"
+	if rec.Code != http.StatusBadRequest || out["error"] != want || out["fields"].(map[string]any)["managementCluster"] != want {
+		t.Errorf("proxmox-only: %d %v", rec.Code, out)
+	}
+	if rec, _ := order("proxmox-stale", "b"); rec.Code != http.StatusCreated {
+		t.Errorf("stale capabilities: %d %s", rec.Code, rec.Body)
+	}
+	if rec, _ := order("vsphere", "c"); rec.Code != http.StatusCreated {
+		t.Errorf("vsphere: %d %s", rec.Code, rec.Body)
+	}
+	// no capabilities at all (machinery does not watch XRDs): as before
+	if rec, _ := order("machinery", "d"); rec.Code != http.StatusCreated {
+		t.Errorf("machinery: %d %s", rec.Code, rec.Body)
+	}
+
+	_, out = s.do(t, "GET", "/api/v1/management-clusters", "", nil)
+	for _, it := range out["items"].([]any) {
+		m := it.(map[string]any)
+		if m["name"] != "vsphere" {
+			continue
+		}
+		caps, _ := m["capabilities"].(map[string]any)
+		kinds, _ := caps["kinds"].([]any)
+		if len(kinds) != 1 || kinds[0].(map[string]any)["configurationVersion"] != "v0.3.1" || caps["environmentConfigs"].([]any)[0] != "proxmox-vm-labul" {
+			t.Errorf("capabilities in the listing: %v", caps)
+		}
+		return
+	}
+	t.Error("vsphere not listed")
+}
