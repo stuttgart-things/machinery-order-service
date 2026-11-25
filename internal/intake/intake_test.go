@@ -147,3 +147,29 @@ func TestRenderRequestedByIdentityBound(t *testing.T) {
 		t.Errorf("caller token: params %v", f.Params[1])
 	}
 }
+
+func TestXREnvironment(t *testing.T) {
+	xr := func(spec string) *v1alpha1.Rendered {
+		return &v1alpha1.Rendered{Files: []v1alpha1.RenderedFile{{
+			Path: "clusters/labul/proxmox/machinery-labul-orders-xrs/demo.yaml",
+			Content: "apiVersion: resources.stuttgart-things.com/v1alpha1\nkind: NativeProxmoxVM\nmetadata:\n  name: demo-vm\n" +
+				"  annotations:\n    stuttgart-things.com/source-path: clusters/labul/proxmox/machinery-labul-orders-xrs/demo.yaml\n" + spec,
+		}}}
+	}
+	for _, tc := range []struct{ name, spec, want string }{
+		{"set", "spec:\n  environmentConfig: labul\n  vm:\n    cpu: 2\n", "labul"},
+		{"unset", "spec:\n  vm:\n    cpu: 2\n", ""},
+		{"not a string", "spec:\n  environmentConfig:\n    name: labul\n", ""},
+		{"no spec", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := intake.XREnvironment(xr(tc.spec)); got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+	// no document names its own file
+	if got := intake.XREnvironment(&v1alpha1.Rendered{Files: []v1alpha1.RenderedFile{{Path: "x.yaml", Content: "kind: ConfigMap\n"}}}); got != "" {
+		t.Errorf("no XR: %q", got)
+	}
+}

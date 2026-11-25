@@ -187,9 +187,18 @@ with kubectl ends `Failed` before its pull request. No data never refuses:
 machinery does not watch `CompositeResourceDefinition`, reports none, or
 `observedAt` is older than 15 minutes.
 
-EnvironmentConfigs are informational: an XR selects one by a **label value**
-(`spec.environmentConfig` against `<configuration>.<group>/environment`), not
-by its name, and machinery does not pass labels through yet.
+An XR selects its EnvironmentConfig by a **label value**, not by its name:
+`spec.environmentConfig` against the label `<configuration>.<group>/environment`
+(e.g. `proxmox-vm.resources.stuttgart-things.com/environment: labul`). A
+missing one does not fail, the XR builds with the defaults. With machinery
+rendering labels (machinery#117, info field `Labels` on `EnvironmentConfig`)
+the service keeps the values of every `…/environment` label in
+`capabilities.environments` and refuses an XR whose `spec.environmentConfig`
+none of them has (400). The label key comes from the XR's Configuration;
+the package manager's long name (`stuttgart-things-crossplane-configurations-proxmox-vm`)
+matches its short prefix (`proxmox-vm`). No check when the XR sets no
+`environmentConfig`, when no EnvironmentConfig carries that key at all, or
+without labels from machinery.
 `CrossplaneHealthy` needs machinery to watch the three package kinds
 (`pkg.crossplane.io`, the shared watch config in stuttgart-things/flux
 `cicd/machinery`); without them it stays Unknown.

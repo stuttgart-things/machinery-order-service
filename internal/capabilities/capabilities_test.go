@@ -118,26 +118,107 @@ func TestCheck(t *testing.T) {
 		{"core group", "v1", "ConfigMap", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := capabilities.Check(mc, tc.apiVersion, tc.kind, now); got != tc.want {
+			if got := capabilities.Check(mc, capabilities.XR{APIVersion: tc.apiVersion, Kind: tc.kind}, now); got != tc.want {
 				t.Errorf("got  %q\nwant %q", got, tc.want)
 			}
 		})
 	}
 
 	t.Run("stale", func(t *testing.T) {
-		if got := capabilities.Check(mc, "resources.stuttgart-things.com/v1alpha1", "NativeVsphereVM", now.Add(capabilities.MaxAge+time.Second)); got != "" {
+		if got := capabilities.Check(mc, capabilities.XR{APIVersion: "resources.stuttgart-things.com/v1alpha1", Kind: "NativeVsphereVM"}, now.Add(capabilities.MaxAge+time.Second)); got != "" {
 			t.Errorf("stale capabilities checked: %q", got)
 		}
 	})
 	t.Run("none", func(t *testing.T) {
-		if got := capabilities.Check(&v1alpha1.ManagementCluster{}, "resources.stuttgart-things.com/v1alpha1", "NativeVsphereVM", now); got != "" {
+		if got := capabilities.Check(&v1alpha1.ManagementCluster{}, capabilities.XR{APIVersion: "resources.stuttgart-things.com/v1alpha1", Kind: "NativeVsphereVM"}, now); got != "" {
 			t.Errorf("no capabilities checked: %q", got)
 		}
 	})
 	t.Run("no XRDs at all refuses", func(t *testing.T) {
 		empty := &v1alpha1.ManagementCluster{ObjectMeta: metav1.ObjectMeta{Name: "bare"}}
 		empty.Status.Capabilities = &v1alpha1.Capabilities{ObservedAt: metav1.NewTime(now)}
-		if got := capabilities.Check(empty, "resources.stuttgart-things.com/v1alpha1", "NativeVsphereVM", now); !strings.Contains(got, "not installed on bare") {
+		if got := capabilities.Check(empty, capabilities.XR{APIVersion: "resources.stuttgart-things.com/v1alpha1", Kind: "NativeVsphereVM"}, now); !strings.Contains(got, "not installed on bare") {
+			t.Errorf("got %q", got)
+		}
+	})
+}
+
+// fleetWithLabels is fleet() with the environment labels machinery renders
+// since machinery#117, and the Configuration under the package manager's
+// long name.
+func fleetWithLabels() *machinerytest.Fake {
+	f := fleet()
+	f.Delete("Configuration", "", "proxmox-vm")
+	f.Set("Configuration", "", "stuttgart-things-crossplane-configurations-proxmox-vm", machinery.Resource{Info: map[string]string{
+		"Package": "ghcr.io/stuttgart-things/crossplane-configurations/proxmox-vm:v0.3.1", "Revision": "proxmox-vm-5c1d2e"}})
+	f.Set(capabilities.KindEnvironmentConfig, "", "proxmox-vm-labul", machinery.Resource{Info: map[string]string{
+		"Labels": "app.kubernetes.io/managed-by=flux, proxmox-vm.resources.stuttgart-things.com/environment=labul"}})
+	f.Set(capabilities.KindEnvironmentConfig, "", "proxmox-vm-defaults", machinery.Resource{Info: map[string]string{
+		"Labels": "proxmox-vm.resources.stuttgart-things.com/environment=default"}})
+	f.Set(capabilities.KindEnvironmentConfig, "", "proxmox-vm-defaults-copy", machinery.Resource{Info: map[string]string{
+		"Labels": "proxmox-vm.resources.stuttgart-things.com/environment=default"}})
+	return f
+}
+
+func TestEnvironments(t *testing.T) {
+	now := time.Now()
+	caps, err := capabilities.Collect(context.Background(), fleetWithLabels(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][]string{"proxmox-vm.resources.stuttgart-things.com/environment": {"default", "labul"}}
+	if !reflect.DeepEqual(caps.Environments, want) {
+		t.Errorf("environments %v", caps.Environments)
+	}
+	mc := &v1alpha1.ManagementCluster{ObjectMeta: metav1.ObjectMeta{Name: "machinery-labul"}}
+	mc.Status.Capabilities = caps
+	vm := func(env string) capabilities.XR {
+		return capabilities.XR{APIVersion: "resources.stuttgart-things.com/v1alpha1", Kind: "NativeProxmoxVM", Environment: env}
+	}
+
+	for _, tc := range []struct{ name, env, want string }{
+		{"matching label", "labul", ""},
+		{"default", "default", ""},
+		{"no environmentConfig", "", ""},
+		{"no EnvironmentConfig with it", "labda",
+			"no EnvironmentConfig on machinery-labul has proxmox-vm.resources.stuttgart-things.com/environment=labda (it has: default, labul); the XR would build with the defaults"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := capabilities.Check(mc, vm(tc.env), now); got != tc.want {
+				t.Errorf("got  %q\nwant %q", got, tc.want)
+			}
+		})
+	}
+
+	t.Run("no label key for the configuration", func(t *testing.T) {
+		// ClusterStack comes from `cluster`; no EnvironmentConfig carries
+		// cluster.config.stuttgart-things.com/environment, so no check.
+		xr := capabilities.XR{APIVersion: "config.stuttgart-things.com/v1alpha1", Kind: "ClusterStack", Environment: "anything"}
+		if got := capabilities.Check(mc, xr, now); got != "" {
+			t.Errorf("got %q", got)
+		}
+	})
+	t.Run("machinery without labels", func(t *testing.T) {
+		caps, err := capabilities.Collect(context.Background(), fleet(), now)
+		if err != nil || caps.Environments != nil {
+			t.Fatalf("%v %v", caps.Environments, err)
+		}
+		old := &v1alpha1.ManagementCluster{ObjectMeta: metav1.ObjectMeta{Name: "x"}}
+		old.Status.Capabilities = caps
+		if got := capabilities.Check(old, vm("labda"), now); got != "" {
+			t.Errorf("checked without labels: %q", got)
+		}
+	})
+	t.Run("short Configuration name", func(t *testing.T) {
+		c := caps.DeepCopy()
+		for i := range c.Kinds {
+			if c.Kinds[i].Kind == "NativeProxmoxVM" {
+				c.Kinds[i].Configuration = "proxmox-vm"
+			}
+		}
+		short := &v1alpha1.ManagementCluster{ObjectMeta: metav1.ObjectMeta{Name: "y"}}
+		short.Status.Capabilities = c
+		if got := capabilities.Check(short, vm("labda"), now); !strings.Contains(got, "environment=labda") {
 			t.Errorf("got %q", got)
 		}
 	})

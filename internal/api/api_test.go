@@ -628,3 +628,39 @@ func TestCapabilitiesIntake(t *testing.T) {
 	}
 	t.Error("vsphere not listed")
 }
+
+// TestEnvironmentIntake: an XR whose spec.environmentConfig matches no
+// EnvironmentConfig label on the cluster is refused (machinery#117).
+func TestEnvironmentIntake(t *testing.T) {
+	s := newSetup(t, false)
+	mc := func(name string, envs []string) *v1alpha1.ManagementCluster {
+		return &v1alpha1.ManagementCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: name},
+			Status: v1alpha1.ManagementClusterStatus{Capabilities: &v1alpha1.Capabilities{
+				ObservedAt: metav1.NewTime(time.Now()),
+				Kinds: []v1alpha1.OfferedKind{{Kind: "NativeVsphereVM", Group: "resources.stuttgart-things.com", Versions: []string{"v1alpha1"},
+					Configuration: "stuttgart-things-crossplane-configurations-vsphere-vm"}},
+				Environments: map[string][]string{"vsphere-vm.resources.stuttgart-things.com/environment": envs},
+			}},
+		}
+	}
+	for _, c := range []*v1alpha1.ManagementCluster{mc("labul-only", []string{"labul"}), mc("labda-too", []string{"labda", "labul"})} {
+		if err := s.c.Create(context.Background(), c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// rendertest renders spec.environmentConfig: labda
+	order := func(cluster, name string) (*httptest.ResponseRecorder, map[string]any) {
+		return s.do(t, "POST", "/api/v1/orders", "", map[string]any{
+			"template": "native-vm-labda-vsphere", "managementCluster": cluster, "parameters": map[string]any{"name": name},
+		})
+	}
+	rec, out := order("labul-only", "a")
+	want := "no EnvironmentConfig on labul-only has vsphere-vm.resources.stuttgart-things.com/environment=labda (it has: labul); the XR would build with the defaults"
+	if rec.Code != http.StatusBadRequest || out["error"] != want {
+		t.Errorf("labul-only: %d %v", rec.Code, out)
+	}
+	if rec, _ := order("labda-too", "b"); rec.Code != http.StatusCreated {
+		t.Errorf("labda-too: %d %s", rec.Code, rec.Body)
+	}
+}

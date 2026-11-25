@@ -1,6 +1,7 @@
 // Package capabilities derives what a management cluster can build from
 // what is installed on it, through machinery (#32): its XRDs (kind, group,
-// versions and the Configuration they come from) and its EnvironmentConfigs.
+// versions and the Configuration they come from) and its EnvironmentConfigs
+// with their environment labels (machinery#117).
 // Intake checks an order's rendered XR against them, so an order for a kind
 // the cluster does not have fails before its pull request, not after the
 // merge (Flux: "no matches for kind").
@@ -38,6 +39,11 @@ const (
 	fieldOwners   = "Owners"
 	fieldPackage  = "Package"
 	fieldRevision = "Revision"
+	fieldLabels   = "Labels"
+
+	// environmentKeySuffix ends the label key an XR's Composition selects
+	// its EnvironmentConfig by: <configuration>.<group>/environment.
+	environmentKeySuffix = "/environment"
 )
 
 // MaxAge is how old capabilities may be before intake ignores them.
@@ -109,35 +115,96 @@ func Collect(ctx context.Context, cl machinery.Client, now time.Time) (*v1alpha1
 		caps.EnvironmentConfigs = []string{}
 		for _, e := range envs {
 			caps.EnvironmentConfigs = append(caps.EnvironmentConfigs, e.Name)
+			labels, ok := e.Info[fieldLabels]
+			if !ok {
+				continue
+			}
+			if caps.Environments == nil {
+				caps.Environments = map[string][]string{}
+			}
+			for key, value := range parseLabels(labels) {
+				if strings.HasSuffix(key, environmentKeySuffix) && !slices.Contains(caps.Environments[key], value) {
+					caps.Environments[key] = append(caps.Environments[key], value)
+				}
+			}
 		}
 		sort.Strings(caps.EnvironmentConfigs)
+		for k := range caps.Environments {
+			sort.Strings(caps.Environments[k])
+		}
 	}
 	return caps, nil
 }
 
-// Check says why the cluster cannot build the XR (apiVersion group/version,
-// kind), or "" when it can or nothing is known.
-func Check(mc *v1alpha1.ManagementCluster, apiVersion, kind string, now time.Time) string {
+// parseLabels reads machinery's rendering of a map ("k=v, k2=v2",
+// machinery#117). Label values never contain "," or "=".
+func parseLabels(s string) map[string]string {
+	out := map[string]string{}
+	for _, p := range strings.Split(s, ", ") {
+		if k, v, ok := strings.Cut(p, "="); ok && k != "" {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// XR is what Check needs of an order's rendered XR.
+type XR struct {
+	APIVersion, Kind string
+	// Environment is its spec.environmentConfig, "" when unset.
+	Environment string
+}
+
+// Check says why the cluster cannot build the XR, or "" when it can or
+// nothing is known: the kind (group/version) must be offered, and an
+// spec.environmentConfig must match an EnvironmentConfig's environment
+// label (<configuration>.<group>/environment) when the cluster has that
+// label key at all.
+func Check(mc *v1alpha1.ManagementCluster, xr XR, now time.Time) string {
 	caps := mc.Status.Capabilities
 	if caps == nil || now.Sub(caps.ObservedAt.Time) > MaxAge {
 		return ""
 	}
-	group, version, ok := strings.Cut(apiVersion, "/")
+	group, version, ok := strings.Cut(xr.APIVersion, "/")
 	if !ok {
 		// core group: never an XR
 		return ""
 	}
 	for _, k := range caps.Kinds {
-		if k.Kind != kind || k.Group != group {
+		if k.Kind != xr.Kind || k.Group != group {
 			continue
 		}
-		if len(k.Versions) == 0 || slices.Contains(k.Versions, version) {
+		if len(k.Versions) > 0 && !slices.Contains(k.Versions, version) {
+			return fmt.Sprintf("%s offers %s.%s in %s, not %s%s", mc.Name, xr.Kind, group,
+				strings.Join(k.Versions, ", "), version, from(k))
+		}
+		return checkEnvironment(mc.Name, caps, k, xr.Environment)
+	}
+	return fmt.Sprintf("%s.%s is not installed on %s (no XRD)", xr.Kind, group, mc.Name)
+}
+
+// checkEnvironment matches the XR's spec.environmentConfig against the
+// environment label of its Configuration. The label key's prefix is the
+// package's short name (proxmox-vm), the Configuration's name may be the
+// package manager's long one (stuttgart-things-crossplane-configurations-
+// proxmox-vm). No label key for it: the convention does not apply here.
+func checkEnvironment(cluster string, caps *v1alpha1.Capabilities, k v1alpha1.OfferedKind, env string) string {
+	if env == "" || k.Configuration == "" || caps.Environments == nil {
+		return ""
+	}
+	suffix := "." + k.Group + environmentKeySuffix
+	for key, values := range caps.Environments {
+		prefix, ok := strings.CutSuffix(key, suffix)
+		if !ok || (prefix != k.Configuration && !strings.HasSuffix(k.Configuration, "-"+prefix)) {
+			continue
+		}
+		if slices.Contains(values, env) {
 			return ""
 		}
-		return fmt.Sprintf("%s offers %s.%s in %s, not %s%s", mc.Name, kind, group,
-			strings.Join(k.Versions, ", "), version, from(k))
+		return fmt.Sprintf("no EnvironmentConfig on %s has %s=%s (it has: %s); the XR would build with the defaults",
+			cluster, key, env, strings.Join(values, ", "))
 	}
-	return fmt.Sprintf("%s.%s is not installed on %s (no XRD)", kind, group, mc.Name)
+	return ""
 }
 
 func from(k v1alpha1.OfferedKind) string {

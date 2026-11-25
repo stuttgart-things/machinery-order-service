@@ -284,6 +284,18 @@ spec:
                       type: string
                     type: array
                     x-kubernetes-list-type: atomic
+                  environments:
+                    additionalProperties:
+                      items:
+                        type: string
+                      type: array
+                    description: |-
+                      Environments are the values of the EnvironmentConfigs' environment
+                      labels, by label key (keys ending in /environment, e.g.
+                      proxmox-vm.resources.stuttgart-things.com/environment: [default,
+                      labul]). An XR's spec.environmentConfig is matched against them.
+                      Unset while machinery does not render labels (machinery#117).
+                    type: object
                   kinds:
                     description: |-
                       Kinds are the composite resource kinds the cluster offers (XRDs that

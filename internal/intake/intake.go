@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"gopkg.in/yaml.v3"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
@@ -215,6 +216,30 @@ func XRRef(rd *v1alpha1.Rendered) (*v1alpha1.ObjectRef, error) {
 		return nil, fmt.Errorf("no document names its own file (%s)", layout.AnnotationSourcePath)
 	}
 	return &v1alpha1.ObjectRef{APIVersion: xr.APIVersion, Kind: xr.Kind, Name: xr.Name, Namespace: xr.Namespace}, nil
+}
+
+// XREnvironment is the rendered XR's spec.environmentConfig, "" when it has
+// none or it is not a string. The capabilities check matches it against the
+// cluster's EnvironmentConfig labels (#32, machinery#117).
+func XREnvironment(rd *v1alpha1.Rendered) string {
+	files, err := Files(rd)
+	if err != nil {
+		return ""
+	}
+	xr, ok := layout.XR(files)
+	if !ok {
+		return ""
+	}
+	var doc struct {
+		Spec struct {
+			EnvironmentConfig any `yaml:"environmentConfig"`
+		} `yaml:"spec"`
+	}
+	if err := yaml.Unmarshal([]byte(xr.Content), &doc); err != nil {
+		return ""
+	}
+	env, _ := doc.Spec.EnvironmentConfig.(string)
+	return env
 }
 
 // Paths are the files' paths.
