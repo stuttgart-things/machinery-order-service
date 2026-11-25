@@ -2,6 +2,7 @@ package machinery_test
 
 import (
 	"context"
+	"errors"
 	"maps"
 	"net"
 	"testing"
@@ -29,6 +30,27 @@ func (f *fakeServer) GetResourceDetail(ctx context.Context, r *maschinist.Resour
 		return nil, status.Error(codes.NotFound, "no")
 	}
 	return &maschinist.ResourceStatus{Name: r.Name, Kind: r.Kind, Ready: true, ConnectionDetails: "10.0.0.5 | started=true, ansibleSucceeded=True", InfoFields: map[string]string{"ansible": "Ready"}}, nil
+}
+
+func (f *fakeServer) GetResources(ctx context.Context, r *maschinist.ResourceRequest) (*maschinist.ResourceListResponse, error) {
+	md, _ := metadata.FromIncomingContext(ctx)
+	if v := md.Get("authorization"); len(v) > 0 {
+		f.auth = v[0]
+	}
+	switch r.Kind {
+	case "Provider":
+		return &maschinist.ResourceListResponse{Resources: []*maschinist.ResourceStatus{
+			{Name: "provider-kubernetes", Kind: "Provider", Conditions: []*maschinist.Condition{
+				{Type: "Installed", Status: "True"},
+				{Type: "Healthy", Status: "False", Reason: "UnhealthyPackageRevision", Message: "node already exists"},
+			}},
+		}}, nil
+	case "Function":
+		// watched, but the cluster does not serve the kind
+		return &maschinist.ResourceListResponse{}, nil
+	default:
+		return nil, status.Errorf(codes.InvalidArgument, "unsupported kind %q", r.Kind)
+	}
 }
 
 func TestGRPCClient(t *testing.T) {
@@ -59,6 +81,28 @@ func TestGRPCClient(t *testing.T) {
 	r, err = c.Get(context.Background(), "NativeVsphereVM", "other", "default")
 	if err != nil || r.Found {
 		t.Errorf("missing: %+v %v", r, err)
+	}
+
+	fs.auth = ""
+	list, err := c.List(context.Background(), "Provider")
+	if err != nil || len(list) != 1 {
+		t.Fatalf("list: %+v %v", list, err)
+	}
+	if fs.auth != "Bearer t0k" {
+		t.Errorf("token not sent on list: %q", fs.auth)
+	}
+	h := list[0].Condition("Healthy")
+	if list[0].Name != "provider-kubernetes" || h == nil || h.Status != "False" || h.Reason != "UnhealthyPackageRevision" || h.Message != "node already exists" {
+		t.Errorf("list item: %+v", list[0])
+	}
+	if list[0].Condition("Ready") != nil {
+		t.Error("Condition(Ready) should be nil")
+	}
+	if list, err := c.List(context.Background(), "Function"); err != nil || len(list) != 0 {
+		t.Errorf("unserved kind: %+v %v", list, err)
+	}
+	if _, err := c.List(context.Background(), "Configuration"); !errors.Is(err, machinery.ErrKindNotWatched) {
+		t.Errorf("unwatched kind: %v", err)
 	}
 }
 

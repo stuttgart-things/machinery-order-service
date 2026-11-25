@@ -183,12 +183,22 @@ type ManagementClusterSpec struct {
 	Cordoned bool `json:"cordoned,omitempty"`
 }
 
-// ManagementClusterStatus is what the service last saw of the cluster.
+// ManagementClusterStatus is what the service last saw of the cluster,
+// through machinery (#31). Conditions: MachineryReachable, FluxReady,
+// CrossplaneHealthy and their summary Ready. Ready=False refuses new orders
+// like spec.cordoned, as long as CheckedAt is recent.
 type ManagementClusterStatus struct {
 	// +optional
 	// +listType=map
 	// +listMapKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	// CheckedAt is when the service last checked the cluster. Older than a
+	// few check intervals, the conditions count as Unknown.
+	// +optional
+	CheckedAt *metav1.Time `json:"checkedAt,omitempty"`
+	// ObservedGeneration is the spec generation the check used.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
 
 // ManagementCluster is a cluster orders can be placed on.
@@ -199,6 +209,7 @@ type ManagementClusterStatus struct {
 // +kubebuilder:printcolumn:name="Lab",type=string,JSONPath=`.spec.lab`
 // +kubebuilder:printcolumn:name="Orders",type=string,JSONPath=`.spec.gitops.ordersPath`
 // +kubebuilder:printcolumn:name="Cordoned",type=boolean,JSONPath=`.spec.cordoned`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 type ManagementCluster struct {
 	metav1.TypeMeta   `json:",inline"`

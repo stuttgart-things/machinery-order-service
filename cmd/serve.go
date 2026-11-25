@@ -217,6 +217,11 @@ func serve(ctx context.Context) error {
 	}).SetupWithManager(mgr); err != nil {
 		return err
 	}
+	if err := (&controller.ClusterReconciler{
+		Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Machinery: dialer, Namespace: ns,
+	}).SetupWithManager(mgr); err != nil {
+		return err
+	}
 	_ = mgr.AddHealthzCheck("ping", healthz.Ping)
 	_ = mgr.AddReadyzCheck("ping", healthz.Ping)
 

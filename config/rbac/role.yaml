@@ -40,6 +40,15 @@ rules:
 - apiGroups:
   - order.machinery.stuttgart-things.com
   resources:
+  - managementclusters/status
+  - orders/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - order.machinery.stuttgart-things.com
+  resources:
   - orders
   verbs:
   - create
@@ -53,12 +62,4 @@ rules:
   resources:
   - orders/finalizers
   verbs:
-  - update
-- apiGroups:
-  - order.machinery.stuttgart-things.com
-  resources:
-  - orders/status
-  verbs:
-  - get
-  - patch
   - update

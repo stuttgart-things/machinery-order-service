@@ -282,6 +282,10 @@ func TestListManagementClusters(t *testing.T) {
 	if !l.GetClusters()[0].GetCordoned() {
 		t.Errorf("closed %v", l.GetClusters()[0])
 	}
+	// Never checked (#31): Unknown, which does not refuse orders.
+	if mc.GetReady() != "Unknown" || mc.GetReadyMessage() != "not checked yet" {
+		t.Errorf("ready %q %q", mc.GetReady(), mc.GetReadyMessage())
+	}
 }
 
 // setPhase moves an order on as the controller would, which the hub sees.

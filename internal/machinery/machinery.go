@@ -12,6 +12,7 @@ package machinery
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -28,6 +29,8 @@ import (
 // Resource is one object as machinery reports it.
 type Resource struct {
 	Found         bool
+	Name          string
+	Namespace     string
 	Ready         bool
 	StatusMessage string
 	// Address is the connection field of machinery's connection details
@@ -36,7 +39,28 @@ type Resource struct {
 	// Info are machinery's info fields plus the status fields from the
 	// connection details (e.g. started, ansibleSucceeded).
 	Info map[string]string
+	// Conditions are the object's status.conditions, in their order.
+	Conditions []Condition
 }
+
+// Condition is one entry of status.conditions.
+type Condition struct {
+	Type, Status, Reason, Message string
+}
+
+// Condition returns the condition of type t, or nil.
+func (r *Resource) Condition(t string) *Condition {
+	for i := range r.Conditions {
+		if r.Conditions[i].Type == t {
+			return &r.Conditions[i]
+		}
+	}
+	return nil
+}
+
+// ErrKindNotWatched: machinery's watch set has no such kind. machinery
+// answered, so it is reachable; it just cannot tell about this kind.
+var ErrKindNotWatched = errors.New("kind not in machinery's watch set")
 
 // SplitConnection splits machinery's connection details,
 // "<connection> | <label>=<value>, ...", into the connection itself and
@@ -68,9 +92,14 @@ func SplitConnection(details string) (address string, fields map[string]string) 
 	return strings.TrimSpace(address), fields
 }
 
-// Client reads one object.
+// Client reads objects.
 type Client interface {
+	// Get reads one object. A missing object is Found=false, not an error.
 	Get(ctx context.Context, kind, name, namespace string) (*Resource, error)
+	// List reads every object of a kind. A kind outside machinery's watch
+	// set is ErrKindNotWatched. A kind the cluster does not serve (CRD
+	// absent) is an empty list: machinery skips it the same way.
+	List(ctx context.Context, kind string) ([]Resource, error)
 }
 
 // Endpoint is how to reach one machinery.
@@ -143,21 +172,48 @@ func (b bearer) GetRequestMetadata(context.Context, ...string) (map[string]strin
 
 func (b bearer) RequireTransportSecurity() bool { return !b.insecure }
 
+func (c *grpcClient) callOpts() []grpc.CallOption {
+	if c.token == "" {
+		return nil
+	}
+	return []grpc.CallOption{grpc.PerRPCCredentials(bearer{token: c.token, insecure: c.insecure})}
+}
+
 // Get reads one object. A missing object is Found=false, not an error.
 func (c *grpcClient) Get(ctx context.Context, kind, name, namespace string) (*Resource, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	var opts []grpc.CallOption
-	if c.token != "" {
-		opts = append(opts, grpc.PerRPCCredentials(bearer{token: c.token, insecure: c.insecure}))
-	}
-	st, err := c.rs.GetResourceDetail(ctx, &maschinist.ResourceDetailRequest{Kind: kind, Name: name, Namespace: namespace}, opts...)
+	st, err := c.rs.GetResourceDetail(ctx, &maschinist.ResourceDetailRequest{Kind: kind, Name: name, Namespace: namespace}, c.callOpts()...)
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
 			return &Resource{}, nil
 		}
 		return nil, fmt.Errorf("machinery: %s/%s: %w", kind, name, err)
 	}
+	return fromStatus(st), nil
+}
+
+// List reads every object of one kind.
+func (c *grpcClient) List(ctx context.Context, kind string) ([]Resource, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	resp, err := c.rs.GetResources(ctx, &maschinist.ResourceRequest{Kind: kind, Count: -1}, c.callOpts()...)
+	if err != nil {
+		// machinery answered, it just cannot list this kind: not in its
+		// watch set (InvalidArgument), or a machinery without the RPC.
+		if c := status.Code(err); c == codes.InvalidArgument || c == codes.Unimplemented {
+			return nil, fmt.Errorf("machinery: %s: %w", kind, ErrKindNotWatched)
+		}
+		return nil, fmt.Errorf("machinery: list %s: %w", kind, err)
+	}
+	out := make([]Resource, 0, len(resp.GetResources()))
+	for _, st := range resp.GetResources() {
+		out = append(out, *fromStatus(st))
+	}
+	return out, nil
+}
+
+func fromStatus(st *maschinist.ResourceStatus) *Resource {
 	address, info := SplitConnection(st.GetConnectionDetails())
 	// machinery's own info fields win over a status field of the same name
 	for k, v := range st.GetInfoFields() {
@@ -166,11 +222,18 @@ func (c *grpcClient) Get(ctx context.Context, kind, name, namespace string) (*Re
 	if len(info) == 0 {
 		info = nil
 	}
+	var conds []Condition
+	for _, c := range st.GetConditions() {
+		conds = append(conds, Condition{Type: c.GetType(), Status: c.GetStatus(), Reason: c.GetReason(), Message: c.GetMessage()})
+	}
 	return &Resource{
 		Found:         true,
+		Name:          st.GetName(),
+		Namespace:     st.GetNamespace(),
 		Ready:         st.GetReady(),
 		StatusMessage: st.GetStatusMessage(),
 		Address:       address,
 		Info:          info,
-	}, nil
+		Conditions:    conds,
+	}
 }

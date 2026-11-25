@@ -124,6 +124,11 @@ message ManagementCluster {
   // auto_merge_rules lists who may auto-merge what.
   repeated AutoMergeRule auto_merge_rules = 6;
   string auto_merge_method = 7;
+  // ready is the cluster's health as the service last checked it through
+  // machinery (#31): "True", "False" or "Unknown" (no machinery, not
+  // checked yet, or a stale check). "False" refuses orders like cordoned.
+  string ready = 8;
+  string ready_message = 9;
 }
 
 message AutoMergeRule {

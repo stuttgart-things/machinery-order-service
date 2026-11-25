@@ -35,6 +35,7 @@ import (
 	"github.com/stuttgart-things/machinery-order-service/api/v1alpha1"
 	"github.com/stuttgart-things/machinery-order-service/internal/auth"
 	"github.com/stuttgart-things/machinery-order-service/internal/automerge"
+	"github.com/stuttgart-things/machinery-order-service/internal/clusterhealth"
 	"github.com/stuttgart-things/machinery-order-service/internal/intake"
 	"github.com/stuttgart-things/machinery-order-service/internal/render"
 	"github.com/stuttgart-things/machinery-order-service/internal/version"
@@ -408,6 +409,9 @@ func (s *Server) Create(ctx context.Context, c *Caller, req CreateRequest) (int,
 	}
 	if mc.Spec.Cordoned {
 		return http.StatusConflict, ErrorResponse{Error: fmt.Sprintf("management cluster %s is cordoned", mc.Name)}
+	}
+	if blocked, why := clusterhealth.Blocking(mc, time.Now()); blocked {
+		return http.StatusConflict, ErrorResponse{Error: why}
 	}
 	requestedBy := req.RequestedBy
 	var requestedByGroups []string
@@ -814,6 +818,13 @@ type ClusterInfo struct {
 	OrdersPath string `json:"ordersPath,omitempty"`
 	// AutoMerge lists who may order with autoMerge, and what.
 	AutoMerge *v1alpha1.AutoMerge `json:"autoMerge,omitempty"`
+	// Ready is True, False or Unknown (no machinery, not checked yet, or
+	// the last check is stale). False refuses orders like cordoned (#31).
+	Ready        string `json:"ready"`
+	ReadyMessage string `json:"readyMessage,omitempty"`
+	// Conditions are the cluster's health conditions as last checked.
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	CheckedAt  *metav1.Time       `json:"checkedAt,omitempty"`
 }
 
 // Clusters lists the management clusters, by name.
@@ -823,11 +834,16 @@ func (s *Server) Clusters(ctx context.Context) ([]ClusterInfo, error) {
 		return nil, err
 	}
 	out := make([]ClusterInfo, 0, len(list.Items))
-	for _, mc := range list.Items {
+	now := time.Now()
+	for i := range list.Items {
+		mc := &list.Items[i]
+		ready, msg := clusterhealth.Effective(mc, now, clusterhealth.MaxAge)
 		out = append(out, ClusterInfo{
 			Name: mc.Name, Lab: mc.Spec.Lab, Cordoned: mc.Spec.Cordoned,
 			Repository: mc.Spec.GitOps.Repository, OrdersPath: mc.Spec.GitOps.OrdersPath,
 			AutoMerge: mc.Spec.AutoMerge,
+			Ready:     string(ready), ReadyMessage: msg,
+			Conditions: mc.Status.Conditions, CheckedAt: mc.Status.CheckedAt,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
@@ -842,7 +858,7 @@ func (s *Server) clusterNames(ctx context.Context) ([]string, error) {
 	}
 	var names []string
 	for _, c := range cs {
-		if !c.Cordoned {
+		if !c.Cordoned && c.Ready != string(metav1.ConditionFalse) {
 			names = append(names, c.Name)
 		}
 	}
