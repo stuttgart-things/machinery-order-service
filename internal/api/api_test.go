@@ -21,6 +21,7 @@ import (
 	"github.com/stuttgart-things/machinery-order-service/internal/api"
 	"github.com/stuttgart-things/machinery-order-service/internal/auth"
 	"github.com/stuttgart-things/machinery-order-service/internal/auth/authtest"
+	"github.com/stuttgart-things/machinery-order-service/internal/clusterhealth"
 	"github.com/stuttgart-things/machinery-order-service/internal/render"
 	"github.com/stuttgart-things/machinery-order-service/internal/render/rendertest"
 )
@@ -507,5 +508,60 @@ func TestTeardown(t *testing.T) {
 	})
 	if code, out := teardown(alice, nil); code != 409 || !strings.Contains(out["error"].(string), "torn down already") {
 		t.Errorf("after the teardown: %d %v", code, out)
+	}
+}
+
+// TestClusterHealthIntake: a recent Ready=False refuses orders like a
+// cordon; a stale one does not (#31).
+func TestClusterHealthIntake(t *testing.T) {
+	s := newSetup(t, false)
+	ctx := context.Background()
+	mc := func(name string, checked time.Duration) *v1alpha1.ManagementCluster {
+		at := metav1.NewTime(time.Now().Add(-checked))
+		return &v1alpha1.ManagementCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: name},
+			Status: v1alpha1.ManagementClusterStatus{
+				CheckedAt: &at,
+				Conditions: []metav1.Condition{{
+					Type: clusterhealth.Ready, Status: metav1.ConditionFalse, Reason: "MachineryUnreachable",
+					Message: "machinery: connection refused", LastTransitionTime: at,
+				}},
+			},
+		}
+	}
+	for _, c := range []*v1alpha1.ManagementCluster{mc("sick", time.Minute), mc("stale", time.Hour)} {
+		if err := s.c.Create(ctx, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rec, out := s.do(t, "POST", "/api/v1/orders", "", map[string]any{"template": "t", "managementCluster": "sick", "parameters": map[string]any{"name": "x"}})
+	if rec.Code != http.StatusConflict || out["error"] != "management cluster sick is not ready: machinery: connection refused" {
+		t.Errorf("sick: %d %v", rec.Code, out)
+	}
+	if rec, _ := s.do(t, "POST", "/api/v1/orders", "", map[string]any{"template": "t", "managementCluster": "stale", "parameters": map[string]any{"name": "y"}}); rec.Code != http.StatusCreated {
+		t.Errorf("stale: %d %s", rec.Code, rec.Body)
+	}
+
+	_, out = s.do(t, "GET", "/api/v1/management-clusters", "", nil)
+	got := map[string]map[string]any{}
+	for _, it := range out["items"].([]any) {
+		m := it.(map[string]any)
+		got[m["name"].(string)] = m
+	}
+	if got["sick"]["ready"] != "False" || got["sick"]["readyMessage"] != "machinery: connection refused" || got["sick"]["conditions"] == nil {
+		t.Errorf("sick: %v", got["sick"])
+	}
+	if got["stale"]["ready"] != "Unknown" || got["stale"]["readyMessage"] != "last check is stale" {
+		t.Errorf("stale: %v", got["stale"])
+	}
+	if got["machinery"]["ready"] != "Unknown" || got["machinery"]["readyMessage"] != "not checked yet" {
+		t.Errorf("machinery: %v", got["machinery"])
+	}
+
+	// The unknown-cluster hint offers only clusters that take orders.
+	_, out = s.do(t, "POST", "/api/v1/orders", "", map[string]any{"template": "t", "managementCluster": "nope", "parameters": map[string]any{"name": "x"}})
+	if msg, _ := out["error"].(string); !strings.Contains(msg, "valid: machinery, stale") || strings.Contains(msg, "sick") {
+		t.Errorf("unknown cluster message: %q", msg)
 	}
 }

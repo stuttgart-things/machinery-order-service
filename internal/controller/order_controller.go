@@ -1,5 +1,7 @@
 // Package controller reconciles Orders: placement (pinned), render, delivery
-// as a pull request, and the status from git, Flux and machinery:
+// as a pull request, and the status from git, Flux and machinery. It also
+// checks every ManagementCluster through machinery (cluster_controller.go,
+// #31); an order waits in Ordered/Placed while its cluster is not ready:
 //
 //	Ordered → Placed → PROpen → Merged → Applied → Building → Ready
 //	                     └→ Cancelled (cancel, or the PR closed unmerged)
@@ -39,6 +41,7 @@ import (
 
 	"github.com/stuttgart-things/machinery-order-service/api/v1alpha1"
 	"github.com/stuttgart-things/machinery-order-service/internal/automerge"
+	"github.com/stuttgart-things/machinery-order-service/internal/clusterhealth"
 	"github.com/stuttgart-things/machinery-order-service/internal/delivery"
 	"github.com/stuttgart-things/machinery-order-service/internal/intake"
 	"github.com/stuttgart-things/machinery-order-service/internal/machinery"
@@ -224,6 +227,11 @@ func (r *OrderReconciler) advance(ctx context.Context, o *v1alpha1.Order) (ctrl.
 			SetPhase(o, v1alpha1.PhaseFailed, fmt.Sprintf("ManagementCluster %s is cordoned", mc.Name))
 			return ctrl.Result{}, nil
 		}
+		if blocked, why := clusterhealth.Blocking(mc, time.Now()); blocked {
+			// A health problem passes; wait for it instead of failing.
+			o.Status.Message = "waiting: " + why
+			return ctrl.Result{RequeueAfter: r.PRPoll}, nil
+		}
 		p := o.Spec.Placement
 		o.Status.Placement = &p
 		SetPhase(o, v1alpha1.PhasePlaced, "pinned to "+p.ManagementCluster)
@@ -233,6 +241,16 @@ func (r *OrderReconciler) advance(ctx context.Context, o *v1alpha1.Order) (ctrl.
 		if why := cancelNote(o); why != "" {
 			SetPhase(o, v1alpha1.PhaseCancelled, why+" before the delivery")
 			return ctrl.Result{}, nil
+		}
+		// Placed is left in the same step that opens the PR, so this only
+		// holds back orders whose cluster turned unhealthy before delivery.
+		mc, err := r.cluster(ctx, o.Spec.Placement.ManagementCluster)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if blocked, why := clusterhealth.Blocking(mc, time.Now()); blocked {
+			o.Status.Message = "waiting: " + why
+			return ctrl.Result{RequeueAfter: r.PRPoll}, nil
 		}
 		return r.deliver(ctx, o)
 
@@ -517,31 +535,38 @@ func (r *OrderReconciler) prOpenedAt(o *v1alpha1.Order, p v1alpha1.Phase) time.T
 // machineryFor returns the cluster's machinery client, or nil when none is
 // configured.
 func (r *OrderReconciler) machineryFor(ctx context.Context, mc *v1alpha1.ManagementCluster) (machinery.Client, error) {
+	reader := r.APIReader
+	if reader == nil {
+		reader = r.Client
+	}
+	return machineryClient(ctx, reader, r.Machinery, r.Namespace, mc)
+}
+
+// machineryClient dials the cluster's machinery, reading its token Secret
+// with reader (namespace defaults to ns). nil, nil when the cluster has no
+// spec.machinery or there is no dialer.
+func machineryClient(ctx context.Context, reader client.Reader, d machinery.Dialer, ns string, mc *v1alpha1.ManagementCluster) (machinery.Client, error) {
 	m := mc.Spec.Machinery
-	if m == nil || r.Machinery == nil {
+	if m == nil || d == nil {
 		return nil, nil
 	}
 	ep := machinery.Endpoint{Address: m.Endpoint, Insecure: m.Insecure}
 	if ref := m.TokenSecretRef; ref != nil {
-		ns := ref.Namespace
-		if ns == "" {
-			ns = r.Namespace
+		sns := ref.Namespace
+		if sns == "" {
+			sns = ns
 		}
 		key := ref.Key
 		if key == "" {
 			key = "token"
 		}
 		sec := &corev1.Secret{}
-		reader := r.APIReader
-		if reader == nil {
-			reader = r.Client
-		}
-		if err := reader.Get(ctx, types.NamespacedName{Namespace: ns, Name: ref.Name}, sec); err != nil {
+		if err := reader.Get(ctx, types.NamespacedName{Namespace: sns, Name: ref.Name}, sec); err != nil {
 			return nil, fmt.Errorf("machinery token of %s: %w", mc.Name, err)
 		}
 		ep.Token = strings.TrimSpace(string(sec.Data[key]))
 	}
-	return r.Machinery.Dial(ep)
+	return d.Dial(ep)
 }
 
 // RevisionSHA takes the commit out of a Flux revision (main@sha1:<sha>,

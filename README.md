@@ -11,7 +11,8 @@ skeleton, stuttgart-things/stuttgart-things#4297.
 ```
 claims CLI / Backstage ──REST + ZITADEL token──▶ machinery-order-service (infra cluster)
    1. Order CR (Ordered), requestedBy from the token
-   2. placement: pinned to a ManagementCluster (Placed)
+   2. placement: pinned to a ManagementCluster (Placed); waits while the
+      cluster is not ready (health through machinery, below)
    3. render through claim-machinery-api with the orderer's token, plus
       order_id, management_cluster, source_path, environment_config
    4. git: XR file + kustomization entry (+ extra files) on a branch,
@@ -48,19 +49,19 @@ on the base branch.
 | `TearingDown` | teardown merged; waiting until `delete-claim-xr.yaml` deleted the XR. A failed `Delete-XR` check shows in condition `Teardown` with the retry command |
 | `Deleted` | machinery no longer sees the XR. After a teardown this is final; otherwise (the XR was Ready and got lost) the order follows it again should it come back. `status.live` keeps the last address and info, `lastSeenAt` says when |
 | `Cancelled` | cancelled before the merge, or the PR was closed unmerged |
-| `Failed` | cannot go on as is: invalid parameters, a taken name or branch, cordoned cluster |
+| `Failed` | cannot go on as is: invalid parameters, a taken name or branch, cordoned cluster. A cluster that is **not ready** does not fail an order: it waits in `Ordered`/`Placed` with the reason in `status.message` |
 
 ## API
 
 | Method | Path | |
 |---|---|---|
-| `POST` | `/api/v1/orders` | `{"template", "managementCluster", "parameters", "reason", "autoMerge"}` → 201 Order, already `Ordered` with a message on what follows, `Location` header. 400 with `fields` when claim-machinery-api rejects parameters, 400 with the valid names for an unknown cluster, 403 when `autoMerge` matches no rule of the cluster |
+| `POST` | `/api/v1/orders` | `{"template", "managementCluster", "parameters", "reason", "autoMerge"}` → 201 Order, already `Ordered` with a message on what follows, `Location` header. 400 with `fields` when claim-machinery-api rejects parameters, 400 with the valid names for an unknown cluster, 409 for a cordoned or not ready cluster, 403 when `autoMerge` matches no rule of the cluster |
 | `GET` | `/api/v1/orders` | `?mine=true`, `?phase=`, `?cluster=`; without the rendered files. Only the orders the caller may see (below) |
 | `GET` | `/api/v1/orders/watch` | Server-Sent Events, `event: order`, same filters and visibility |
 | `GET` | `/api/v1/orders/{id}` | one order with its files; 404 when the caller may not see it |
 | `POST` | `/api/v1/orders/{id}/cancel` | `{"resourceVersion"}` optional: 409 when the order moved. Only before the merge, by whoever may see it |
 | `POST` | `/api/v1/orders/{id}/teardown` | `{"reason", "autoMerge", "resourceVersion"}` → 202. Only merged orders, by whoever may see them; 409 before the merge, while a teardown runs or after one completed; 403 when `autoMerge` is asked by someone other than the orderer or matches no rule with `actions: [teardown]` |
-| `GET` | `/api/v1/management-clusters` | `{"items": [{"name", "lab", "cordoned", "repository", "ordersPath", "autoMerge"}]}`: where orders can go, and who may auto-merge what |
+| `GET` | `/api/v1/management-clusters` | `{"items": [{"name", "lab", "cordoned", "ready", "readyMessage", "conditions", "checkedAt", "repository", "ordersPath", "autoMerge"}]}`: where orders can go, whether the cluster is healthy, and who may auto-merge what |
 | `GET` | `/ui/` | **My orders**, live through SSE |
 | `GET` | `/ui/?scope=all` | **All orders** (admins) or **All I may see** (own + the teams', ADR 0001), with orderer and group; `group=<group>` (or `-` for none) keeps one group, `sort=group` groups the rows. Group = the order's `owner`, else the orderer's groups at order time |
 | `GET` | `/ui/orders/{id}` | **Order detail**: timeline, files, PR/commit, order ID, Cancel, Tear down (a human merges) |
@@ -151,7 +152,31 @@ Group `order.machinery.stuttgart-things.com/v1alpha1`, CRDs in
   `flux.{name, namespace, kind, revisionField}`,
   `autoMerge.{method, rules[].{name, users, groups, templates, parameters, parameterPrefixes, actions, maxLifetime}}`
   (`actions`: `order`, `teardown`; empty = `[order]`; `maxLifetime` needs `teardown`),
-  `cordoned`.
+  `cordoned`. Status: the health conditions below, `checkedAt`,
+  `observedGeneration`.
+
+### Cluster health
+
+Every minute the service checks each ManagementCluster through its
+machinery (read-only, no kubeconfig) and writes conditions to its status:
+
+| Condition | False when |
+|---|---|
+| `MachineryReachable` | machinery does not answer (or its token Secret is missing) |
+| `FluxReady` | the Kustomization in `spec.flux` is missing or `Ready=False` (`Ready=Unknown` while it reconciles is not a failure) |
+| `CrossplaneHealthy` | a `Configuration`, `Provider` or `Function` has `Healthy=False` (the Lock collisions in crossplane-configurations take them all down at once) |
+| `Ready` | any of the above is False |
+
+`Ready=False` refuses new orders (409) like `cordoned`, and orders that have
+no pull request yet wait. Orders past their PR go on. `Unknown` never
+blocks: no `spec.machinery`, `spec.flux` unset, the package kinds not in
+machinery's watch set, or a check older than 5 minutes (`checkedAt`; the
+service is not checking). The service never cordons a cluster itself.
+
+`kubectl get mc` shows `Ready`; `kubectl get mc <name> -o yaml` the reasons.
+`CrossplaneHealthy` needs machinery to watch the three package kinds
+(`pkg.crossplane.io`, the shared watch config in stuttgart-things/flux
+`cicd/machinery`); without them it stays Unknown.
 
 The live side comes from machinery's gRPC `GetResourceDetail` (kind + name of
 the rendered XR). The Applied check reads the Flux Kustomization through

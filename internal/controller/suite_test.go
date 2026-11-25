@@ -57,6 +57,20 @@ const kust = "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\n
 
 func start(t *testing.T) *env {
 	t.Helper()
+	return startEnv(t, false)
+}
+
+// startHealth also runs the ManagementCluster health check (#31). The
+// other tests leave it out: their fake machinery has no Kustomization or
+// packages until a test sets them, which the check would rightly call not
+// ready.
+func startHealth(t *testing.T) *env {
+	t.Helper()
+	return startEnv(t, true)
+}
+
+func startEnv(t *testing.T, health bool) *env {
+	t.Helper()
 	te := &envtest.Environment{
 		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "config", "crd")},
 		ErrorIfCRDPathMissing: true,
@@ -102,6 +116,14 @@ func start(t *testing.T) *env {
 	}
 	if err := r.SetupWithManager(mgr); err != nil {
 		t.Fatal(err)
+	}
+	if health {
+		if err := (&controller.ClusterReconciler{
+			Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Machinery: e.machinery, Namespace: "default",
+			Poll: 100 * time.Millisecond,
+		}).SetupWithManager(mgr); err != nil {
+			t.Fatal(err)
+		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)

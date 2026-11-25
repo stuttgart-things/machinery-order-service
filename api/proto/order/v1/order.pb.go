@@ -656,8 +656,13 @@ type ManagementCluster struct {
 	// auto_merge_rules lists who may auto-merge what.
 	AutoMergeRules  []*AutoMergeRule `protobuf:"bytes,6,rep,name=auto_merge_rules,json=autoMergeRules,proto3" json:"auto_merge_rules,omitempty"`
 	AutoMergeMethod string           `protobuf:"bytes,7,opt,name=auto_merge_method,json=autoMergeMethod,proto3" json:"auto_merge_method,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// ready is the cluster's health as the service last checked it through
+	// machinery (#31): "True", "False" or "Unknown" (no machinery, not
+	// checked yet, or a stale check). "False" refuses orders like cordoned.
+	Ready         string `protobuf:"bytes,8,opt,name=ready,proto3" json:"ready,omitempty"`
+	ReadyMessage  string `protobuf:"bytes,9,opt,name=ready_message,json=readyMessage,proto3" json:"ready_message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ManagementCluster) Reset() {
@@ -735,6 +740,20 @@ func (x *ManagementCluster) GetAutoMergeRules() []*AutoMergeRule {
 func (x *ManagementCluster) GetAutoMergeMethod() string {
 	if x != nil {
 		return x.AutoMergeMethod
+	}
+	return ""
+}
+
+func (x *ManagementCluster) GetReady() string {
+	if x != nil {
+		return x.Ready
+	}
+	return ""
+}
+
+func (x *ManagementCluster) GetReadyMessage() string {
+	if x != nil {
+		return x.ReadyMessage
 	}
 	return ""
 }
@@ -1692,7 +1711,7 @@ const file_order_v1_order_proto_rawDesc = "" +
 	"\x10resource_version\x18\x04 \x01(\tR\x0fresourceVersion\"\x1f\n" +
 	"\x1dListManagementClustersRequest\"Y\n" +
 	"\x1eListManagementClustersResponse\x127\n" +
-	"\bclusters\x18\x01 \x03(\v2\x1b.order.v1.ManagementClusterR\bclusters\"\x85\x02\n" +
+	"\bclusters\x18\x01 \x03(\v2\x1b.order.v1.ManagementClusterR\bclusters\"\xc0\x02\n" +
 	"\x11ManagementCluster\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x10\n" +
 	"\x03lab\x18\x02 \x01(\tR\x03lab\x12\x1a\n" +
@@ -1703,7 +1722,9 @@ const file_order_v1_order_proto_rawDesc = "" +
 	"\vorders_path\x18\x05 \x01(\tR\n" +
 	"ordersPath\x12A\n" +
 	"\x10auto_merge_rules\x18\x06 \x03(\v2\x17.order.v1.AutoMergeRuleR\x0eautoMergeRules\x12*\n" +
-	"\x11auto_merge_method\x18\a \x01(\tR\x0fautoMergeMethod\"\xe2\x03\n" +
+	"\x11auto_merge_method\x18\a \x01(\tR\x0fautoMergeMethod\x12\x14\n" +
+	"\x05ready\x18\b \x01(\tR\x05ready\x12#\n" +
+	"\rready_message\x18\t \x01(\tR\freadyMessage\"\xe2\x03\n" +
 	"\rAutoMergeRule\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05users\x18\x02 \x03(\tR\x05users\x12\x16\n" +

@@ -35,7 +35,14 @@ API (`apiRunnable`, every replica).
   commit trailer; `File.Delete` removes a file (teardown). A foreign branch
   whose head is on the base is deleted and recreated (#20). `ConflictError` =
   taken file/branch (order Failed; a teardown only records it).
-- `internal/machinery` - gRPC client for machinery `GetResourceDetail`.
+- `internal/machinery` - gRPC client for machinery `GetResourceDetail` and
+  `GetResources` (`List`; a kind outside the watch set or an RPC machinery
+  lacks is `ErrKindNotWatched`, which means "answered, cannot tell").
+- `internal/clusterhealth` - ManagementCluster health through machinery (#31):
+  `Check` (conditions `MachineryReachable`, `FluxReady`, `CrossplaneHealthy`,
+  `Ready`), `Effective`/`Blocking` (only a recent `Ready=False` blocks;
+  stale after `MaxAge`). `internal/controller/cluster_controller.go` writes it
+  every minute; intake (409) and the Ordered/Placed phases (wait) read it.
 - `internal/controller` - the phase machine (`teardown.go`: ADR 0003,
   delete-claim PR, `TeardownPROpen` → `TearingDown` → `Deleted`). `step` loops `advance` until the
   phase stops moving. Errors that retrying cannot fix end in `Failed`

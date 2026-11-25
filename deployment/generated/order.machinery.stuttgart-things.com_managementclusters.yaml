@@ -26,6 +26,9 @@ spec:
     - jsonPath: .spec.cordoned
       name: Cordoned
       type: boolean
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -261,9 +264,18 @@ spec:
                 type: object
             type: object
           status:
-            description: ManagementClusterStatus is what the service last saw of the
-              cluster.
+            description: |-
+              ManagementClusterStatus is what the service last saw of the cluster,
+              through machinery (#31). Conditions: MachineryReachable, FluxReady,
+              CrossplaneHealthy and their summary Ready. Ready=False refuses new orders
+              like spec.cordoned, as long as CheckedAt is recent.
             properties:
+              checkedAt:
+                description: |-
+                  CheckedAt is when the service last checked the cluster. Older than a
+                  few check intervals, the conditions count as Unknown.
+                format: date-time
+                type: string
               conditions:
                 items:
                   description: Condition contains details for one aspect of the current
@@ -323,6 +335,10 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              observedGeneration:
+                description: ObservedGeneration is the spec generation the check used.
+                format: int64
+                type: integer
             type: object
         type: object
     served: true
