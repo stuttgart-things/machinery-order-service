@@ -222,6 +222,13 @@ type Capabilities struct {
 	// +optional
 	// +listType=atomic
 	EnvironmentConfigs []string `json:"environmentConfigs,omitempty"`
+	// Environments are the values of the EnvironmentConfigs' environment
+	// labels, by label key (keys ending in /environment, e.g.
+	// proxmox-vm.resources.stuttgart-things.com/environment: [default,
+	// labul]). An XR's spec.environmentConfig is matched against them.
+	// Unset while machinery does not render labels (machinery#117).
+	// +optional
+	Environments map[string][]string `json:"environments,omitempty"`
 }
 
 // OfferedKind is one XRD.

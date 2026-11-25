@@ -462,7 +462,7 @@ func (s *Server) Create(ctx context.Context, c *Caller, req CreateRequest) (int,
 	}
 	o.Spec.Rendered = rd
 	if xr, err := intake.XRRef(rd); err == nil {
-		if why := capabilities.Check(mc, xr.APIVersion, xr.Kind, time.Now()); why != "" {
+		if why := capabilities.Check(mc, capabilities.XR{APIVersion: xr.APIVersion, Kind: xr.Kind, Environment: intake.XREnvironment(rd)}, time.Now()); why != "" {
 			return http.StatusBadRequest, ErrorResponse{Error: why, Fields: map[string]string{"managementCluster": why}}
 		}
 	}
