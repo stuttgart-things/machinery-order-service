@@ -1,3 +1,10 @@
+# [0.10.0](https://github.com/stuttgart-things/machinery-order-service/compare/v0.9.0...v0.10.0) (2026-11-25)
+
+
+### Features
+
+* ManagementCluster capabilities, refuse orders for kinds the cluster does not offer ([#34](https://github.com/stuttgart-things/machinery-order-service/issues/34)) ([269311f](https://github.com/stuttgart-things/machinery-order-service/commit/269311fd18081746b450438ddbf2dadda52dd5dc))
+
 # [0.9.0](https://github.com/stuttgart-things/machinery-order-service/compare/v0.8.0...v0.9.0) (2026-11-25)
 
 
