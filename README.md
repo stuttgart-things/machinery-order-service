@@ -55,13 +55,13 @@ on the base branch.
 
 | Method | Path | |
 |---|---|---|
-| `POST` | `/api/v1/orders` | `{"template", "managementCluster", "parameters", "reason", "autoMerge"}` → 201 Order, already `Ordered` with a message on what follows, `Location` header. 400 with `fields` when claim-machinery-api rejects parameters, 400 with the valid names for an unknown cluster, 409 for a cordoned or not ready cluster, 403 when `autoMerge` matches no rule of the cluster |
+| `POST` | `/api/v1/orders` | `{"template", "managementCluster", "parameters", "reason", "autoMerge"}` → 201 Order, already `Ordered` with a message on what follows, `Location` header. 400 with `fields` when claim-machinery-api rejects parameters, 400 with the valid names for an unknown cluster, 409 for a cordoned or not ready cluster, 400 (field `managementCluster`) when the cluster does not offer the rendered XR's kind/version, 403 when `autoMerge` matches no rule of the cluster |
 | `GET` | `/api/v1/orders` | `?mine=true`, `?phase=`, `?cluster=`; without the rendered files. Only the orders the caller may see (below) |
 | `GET` | `/api/v1/orders/watch` | Server-Sent Events, `event: order`, same filters and visibility |
 | `GET` | `/api/v1/orders/{id}` | one order with its files; 404 when the caller may not see it |
 | `POST` | `/api/v1/orders/{id}/cancel` | `{"resourceVersion"}` optional: 409 when the order moved. Only before the merge, by whoever may see it |
 | `POST` | `/api/v1/orders/{id}/teardown` | `{"reason", "autoMerge", "resourceVersion"}` → 202. Only merged orders, by whoever may see them; 409 before the merge, while a teardown runs or after one completed; 403 when `autoMerge` is asked by someone other than the orderer or matches no rule with `actions: [teardown]` |
-| `GET` | `/api/v1/management-clusters` | `{"items": [{"name", "lab", "cordoned", "ready", "readyMessage", "conditions", "checkedAt", "repository", "ordersPath", "autoMerge"}]}`: where orders can go, whether the cluster is healthy, and who may auto-merge what |
+| `GET` | `/api/v1/management-clusters` | `{"items": [{"name", "lab", "cordoned", "ready", "readyMessage", "conditions", "checkedAt", "capabilities", "repository", "ordersPath", "autoMerge"}]}`: where orders can go, whether the cluster is healthy, what it can build, and who may auto-merge what |
 | `GET` | `/ui/` | **My orders**, live through SSE |
 | `GET` | `/ui/?scope=all` | **All orders** (admins) or **All I may see** (own + the teams', ADR 0001), with orderer and group; `group=<group>` (or `-` for none) keeps one group, `sort=group` groups the rows. Group = the order's `owner`, else the orderer's groups at order time |
 | `GET` | `/ui/orders/{id}` | **Order detail**: timeline, files, PR/commit, order ID, Cancel, Tear down (a human merges) |
@@ -153,7 +153,7 @@ Group `order.machinery.stuttgart-things.com/v1alpha1`, CRDs in
   `autoMerge.{method, rules[].{name, users, groups, templates, parameters, parameterPrefixes, actions, maxLifetime}}`
   (`actions`: `order`, `teardown`; empty = `[order]`; `maxLifetime` needs `teardown`),
   `cordoned`. Status: the health conditions below, `checkedAt`,
-  `observedGeneration`.
+  `observedGeneration`, `capabilities` (below).
 
 ### Cluster health
 
@@ -174,6 +174,22 @@ machinery's watch set, or a check older than 5 minutes (`checkedAt`; the
 service is not checking). The service never cordons a cluster itself.
 
 `kubectl get mc` shows `Ready`; `kubectl get mc <name> -o yaml` the reasons.
+
+### Capabilities
+
+With the same check the service reads what the cluster can build
+(`status.capabilities`, #32): `kinds[]` from its XRDs (`kind`, `group`,
+`versions`, and the `configuration`/`configurationVersion` that installed it,
+through the XRD's owning ConfigurationRevision) and the names of its
+`environmentConfigs`. An order whose rendered XR (apiVersion + kind) the
+cluster does not offer is refused at intake with 400, and an order created
+with kubectl ends `Failed` before its pull request. No data never refuses:
+machinery does not watch `CompositeResourceDefinition`, reports none, or
+`observedAt` is older than 15 minutes.
+
+EnvironmentConfigs are informational: an XR selects one by a **label value**
+(`spec.environmentConfig` against `<configuration>.<group>/environment`), not
+by its name, and machinery does not pass labels through yet.
 `CrossplaneHealthy` needs machinery to watch the three package kinds
 (`pkg.crossplane.io`, the shared watch config in stuttgart-things/flux
 `cicd/machinery`); without them it stays Unknown.

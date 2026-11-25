@@ -199,6 +199,45 @@ type ManagementClusterStatus struct {
 	// ObservedGeneration is the spec generation the check used.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// Capabilities is what the cluster can build, as machinery last saw it
+	// (#32). Unset while machinery does not watch the XRDs.
+	// +optional
+	Capabilities *Capabilities `json:"capabilities,omitempty"`
+}
+
+// Capabilities is derived from what is installed on the cluster, not from
+// a list someone keeps.
+type Capabilities struct {
+	// ObservedAt is when machinery last answered for them. Older than a
+	// few check intervals, intake does not check against them.
+	ObservedAt metav1.Time `json:"observedAt"`
+	// Kinds are the composite resource kinds the cluster offers (XRDs that
+	// are not Established=False), by kind.
+	// +optional
+	// +listType=atomic
+	Kinds []OfferedKind `json:"kinds,omitempty"`
+	// EnvironmentConfigs are the names of the cluster's EnvironmentConfigs;
+	// nil while machinery does not watch them. Informational: an XR selects
+	// one by a label value, not by its name.
+	// +optional
+	// +listType=atomic
+	EnvironmentConfigs []string `json:"environmentConfigs,omitempty"`
+}
+
+// OfferedKind is one XRD.
+type OfferedKind struct {
+	Kind  string `json:"kind"`
+	Group string `json:"group"`
+	// Versions are the XRD's versions.
+	// +optional
+	// +listType=atomic
+	Versions []string `json:"versions,omitempty"`
+	// Configuration is the package the XRD comes from, if any, and
+	// ConfigurationVersion its tag.
+	// +optional
+	Configuration string `json:"configuration,omitempty"`
+	// +optional
+	ConfigurationVersion string `json:"configurationVersion,omitempty"`
 }
 
 // ManagementCluster is a cluster orders can be placed on.

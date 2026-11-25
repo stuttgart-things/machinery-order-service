@@ -11,6 +11,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/stuttgart-things/machinery-order-service/api/v1alpha1"
+	"github.com/stuttgart-things/machinery-order-service/internal/capabilities"
 	"github.com/stuttgart-things/machinery-order-service/internal/clusterhealth"
 	"github.com/stuttgart-things/machinery-order-service/internal/machinery"
 )
@@ -85,4 +86,60 @@ func TestClusterHealth(t *testing.T) {
 	// An order already past the PR is not held back by it.
 	e.git.Merge(e.git.Pulls()[0].Number)
 	e.wait(t, "ord-000000000031", "Merged", phase(v1alpha1.PhaseMerged))
+}
+
+func TestClusterCapabilities(t *testing.T) {
+	e := startHealth(t)
+	e.machinery.Set("Kustomization", "flux-system", "machinery-orders-xrs", machinery.Resource{
+		Ready: true, Conditions: []machinery.Condition{{Type: "Ready", Status: "True", Reason: "ReconciliationSucceeded"}},
+	})
+	xrd := func(name, kind string) {
+		e.machinery.Set(capabilities.KindXRD, "", name, machinery.Resource{Info: map[string]string{
+			"Group": "resources.stuttgart-things.com", "Kind": kind, "Versions": "v1alpha1", "Owners": name + "-rev",
+		}})
+	}
+	// The cluster only has Proxmox VMs; the fake template renders a
+	// NativeVsphereVM.
+	xrd("proxmox-vm", "NativeProxmoxVM")
+	e.machinery.Set("Configuration", "", "proxmox-vm", machinery.Resource{Info: map[string]string{
+		"Package": "ghcr.io/stuttgart-things/crossplane-configurations/proxmox-vm:v0.3.1", "Revision": "proxmox-vm-rev",
+	}})
+	e.cluster(t, true)
+
+	mc := e.waitCluster(t, metav1.ConditionTrue)
+	deadline := time.Now().Add(20 * time.Second)
+	for mc.Status.Capabilities == nil && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+		_ = e.c.Get(context.Background(), client.ObjectKey{Name: "machinery"}, mc)
+	}
+	caps := mc.Status.Capabilities
+	if caps == nil || len(caps.Kinds) != 1 || caps.Kinds[0].Kind != "NativeProxmoxVM" ||
+		caps.Kinds[0].Configuration != "proxmox-vm" || caps.Kinds[0].ConfigurationVersion != "v0.3.1" {
+		t.Fatalf("capabilities %+v", caps)
+	}
+
+	// An order created with kubectl is rendered by the controller and fails
+	// before its pull request.
+	e.order(t, "ord-000000000032", `{"name":"demo","use_case":"dev"}`)
+	o := e.wait(t, "ord-000000000032", "Failed", phase(v1alpha1.PhaseFailed))
+	if !strings.Contains(o.Status.Message, "NativeVsphereVM.resources.stuttgart-things.com is not installed on machinery") {
+		t.Errorf("message %q", o.Status.Message)
+	}
+	if len(e.git.Pulls()) != 0 {
+		t.Fatalf("a PR was opened: %+v", e.git.Pulls())
+	}
+
+	// Once the XRD is there, the next order goes through.
+	xrd("vsphere-vm", "NativeVsphereVM")
+	e.wait(t, "ord-000000000032", "still Failed", phase(v1alpha1.PhaseFailed))
+	deadline = time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		_ = e.c.Get(context.Background(), client.ObjectKey{Name: "machinery"}, mc)
+		if c := mc.Status.Capabilities; c != nil && len(c.Kinds) == 2 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	e.order(t, "ord-000000000033", `{"name":"demo2","use_case":"dev"}`)
+	e.wait(t, "ord-000000000033", "PROpen", phase(v1alpha1.PhasePROpen))
 }

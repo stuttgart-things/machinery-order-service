@@ -43,6 +43,11 @@ API (`apiRunnable`, every replica).
   `Ready`), `Effective`/`Blocking` (only a recent `Ready=False` blocks;
   stale after `MaxAge`). `internal/controller/cluster_controller.go` writes it
   every minute; intake (409) and the Ordered/Placed phases (wait) read it.
+- `internal/capabilities` - what a cluster can build (#32): `Collect` (XRDs
+  with their Configuration via the owning revision, EnvironmentConfig names;
+  nil = no data, also for zero XRDs), `Check` (rendered XR's apiVersion/kind;
+  fail-open when stale after `MaxAge`). Intake answers 400, the controller
+  fails the order before its PR.
 - `internal/controller` - the phase machine (`teardown.go`: ADR 0003,
   delete-claim PR, `TeardownPROpen` → `TearingDown` → `Deleted`). `step` loops `advance` until the
   phase stops moving. Errors that retrying cannot fix end in `Failed`

@@ -41,6 +41,7 @@ import (
 
 	"github.com/stuttgart-things/machinery-order-service/api/v1alpha1"
 	"github.com/stuttgart-things/machinery-order-service/internal/automerge"
+	"github.com/stuttgart-things/machinery-order-service/internal/capabilities"
 	"github.com/stuttgart-things/machinery-order-service/internal/clusterhealth"
 	"github.com/stuttgart-things/machinery-order-service/internal/delivery"
 	"github.com/stuttgart-things/machinery-order-service/internal/intake"
@@ -319,6 +320,9 @@ func (r *OrderReconciler) deliver(ctx context.Context, o *v1alpha1.Order) (ctrl.
 	xr, err := intake.XRRef(rd)
 	if err != nil {
 		return fail(o, "render", &intake.InvalidError{Msg: err.Error()})
+	}
+	if why := capabilities.Check(mc, xr.APIVersion, xr.Kind, time.Now()); why != "" {
+		return fail(o, "placement", &intake.InvalidError{Msg: why})
 	}
 	o.Status.XRRef = xr
 	o.Status.Files = intake.Paths(rd)
