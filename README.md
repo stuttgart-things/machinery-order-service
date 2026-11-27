@@ -307,9 +307,14 @@ Tests use fakes for everything outside: `internal/delivery/githubfake`
 
 ## Not here yet
 
-- teardown after the merge, recovering Orders from git + live (`Recovered`),
-  `adopt` for hand-written XRs; finding XRs by order-id in machinery needs
-  stuttgart-things/stuttgart-things#4557
-- the scheduler (InfraTarget, PlacementPolicy, capacity): #4298, #4299
-- UI stages 2–4 (#4300); a direct ZITADEL browser login (today: the portal's
-  forwarded user or a bearer token)
+- recovering Orders from git + live (`Recovered`) and `adopt` for
+  hand-written XRs: stuttgart-things/stuttgart-things#4823 (machinery's side,
+  finding XRs by order-id, is done: stuttgart-things/stuttgart-things#4557)
+- the scheduler (InfraTarget, PlacementPolicy, capacity):
+  stuttgart-things/stuttgart-things#4298, stuttgart-things/stuttgart-things#4299
+- UI stages 2–4 (stuttgart-things/stuttgart-things#4300); a direct ZITADEL
+  browser login (today: the portal's forwarded user or a bearer token)
+
+Done since this list was first written: teardown after the merge as a
+delete-claim pull request ([ADR 0003](docs/adr/0003-teardown.md), v0.5.0) and the
+gRPC API ([gRPC API](#grpc-api), v0.8.0).
