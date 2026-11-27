@@ -659,8 +659,11 @@ type ManagementCluster struct {
 	// ready is the cluster's health as the service last checked it through
 	// machinery (#31): "True", "False" or "Unknown" (no machinery, not
 	// checked yet, or a stale check). "False" refuses orders like cordoned.
-	Ready         string `protobuf:"bytes,8,opt,name=ready,proto3" json:"ready,omitempty"`
-	ReadyMessage  string `protobuf:"bytes,9,opt,name=ready_message,json=readyMessage,proto3" json:"ready_message,omitempty"`
+	Ready        string `protobuf:"bytes,8,opt,name=ready,proto3" json:"ready,omitempty"`
+	ReadyMessage string `protobuf:"bytes,9,opt,name=ready_message,json=readyMessage,proto3" json:"ready_message,omitempty"`
+	// allowed_kinds are the XR kinds the cluster takes orders for (`Kind` or
+	// `Kind.group`); empty = every kind. Others are refused before the PR.
+	AllowedKinds  []string `protobuf:"bytes,10,rep,name=allowed_kinds,json=allowedKinds,proto3" json:"allowed_kinds,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -756,6 +759,13 @@ func (x *ManagementCluster) GetReadyMessage() string {
 		return x.ReadyMessage
 	}
 	return ""
+}
+
+func (x *ManagementCluster) GetAllowedKinds() []string {
+	if x != nil {
+		return x.AllowedKinds
+	}
+	return nil
 }
 
 type AutoMergeRule struct {
@@ -1711,7 +1721,7 @@ const file_order_v1_order_proto_rawDesc = "" +
 	"\x10resource_version\x18\x04 \x01(\tR\x0fresourceVersion\"\x1f\n" +
 	"\x1dListManagementClustersRequest\"Y\n" +
 	"\x1eListManagementClustersResponse\x127\n" +
-	"\bclusters\x18\x01 \x03(\v2\x1b.order.v1.ManagementClusterR\bclusters\"\xc0\x02\n" +
+	"\bclusters\x18\x01 \x03(\v2\x1b.order.v1.ManagementClusterR\bclusters\"\xe5\x02\n" +
 	"\x11ManagementCluster\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x10\n" +
 	"\x03lab\x18\x02 \x01(\tR\x03lab\x12\x1a\n" +
@@ -1724,7 +1734,9 @@ const file_order_v1_order_proto_rawDesc = "" +
 	"\x10auto_merge_rules\x18\x06 \x03(\v2\x17.order.v1.AutoMergeRuleR\x0eautoMergeRules\x12*\n" +
 	"\x11auto_merge_method\x18\a \x01(\tR\x0fautoMergeMethod\x12\x14\n" +
 	"\x05ready\x18\b \x01(\tR\x05ready\x12#\n" +
-	"\rready_message\x18\t \x01(\tR\freadyMessage\"\xe2\x03\n" +
+	"\rready_message\x18\t \x01(\tR\freadyMessage\x12#\n" +
+	"\rallowed_kinds\x18\n" +
+	" \x03(\tR\fallowedKinds\"\xe2\x03\n" +
 	"\rAutoMergeRule\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05users\x18\x02 \x03(\tR\x05users\x12\x16\n" +

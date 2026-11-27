@@ -321,7 +321,12 @@ func (r *OrderReconciler) deliver(ctx context.Context, o *v1alpha1.Order) (ctrl.
 	if err != nil {
 		return fail(o, "render", &intake.InvalidError{Msg: err.Error()})
 	}
-	if why := capabilities.Check(mc, capabilities.XR{APIVersion: xr.APIVersion, Kind: xr.Kind, Environment: intake.XREnvironment(rd)}, time.Now()); why != "" {
+	x := capabilities.XR{APIVersion: xr.APIVersion, Kind: xr.Kind, Environment: intake.XREnvironment(rd)}
+	// allowedKinds also for Orders created with kubectl, which skip the API.
+	if why := capabilities.Allowed(mc, x); why != "" {
+		return fail(o, "placement", &intake.InvalidError{Msg: why})
+	}
+	if why := capabilities.Check(mc, x, time.Now()); why != "" {
 		return fail(o, "placement", &intake.InvalidError{Msg: why})
 	}
 	o.Status.XRRef = xr

@@ -26,6 +26,9 @@ spec:
     - jsonPath: .spec.cordoned
       name: Cordoned
       type: boolean
+    - jsonPath: .spec.allowedKinds
+      name: Allowed
+      type: string
     - jsonPath: .status.conditions[?(@.type=="Ready")].status
       name: Ready
       type: string
@@ -59,6 +62,25 @@ spec:
               ManagementClusterSpec describes a cluster that applies orders: Flux pulls
               its orders directory, Crossplane builds the XRs.
             properties:
+              allowedKinds:
+                description: |-
+                  AllowedKinds are the XR kinds this cluster takes orders for, as
+                  `Kind` (any group) or `Kind.group` (e.g. `MinioBucket` or
+                  `MinioBucket.storage.stuttgart-things.com`). Empty: every kind
+                  (as before). An order whose rendered XR is not listed is refused
+                  before its pull request (REST/gRPC: 400; a kubectl Order: Failed).
+
+                  Which kinds a cluster builds is infrastructure, so it is set here;
+                  who may order which template is the template's orderRoles
+                  (claim-machinery-api). The scheduler (#25) will use AllowedKinds as a
+                  filter when it picks a cluster, next to Cordoned, Ready and
+                  status.capabilities.
+                items:
+                  pattern: ^[A-Z][A-Za-z0-9]*(\.[a-z0-9]([-a-z0-9.]*[a-z0-9])?)?$
+                  type: string
+                maxItems: 32
+                type: array
+                x-kubernetes-list-type: set
               autoMerge:
                 description: |-
                   AutoMerge allows the service to merge some orders' pull requests

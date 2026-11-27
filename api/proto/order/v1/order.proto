@@ -129,6 +129,9 @@ message ManagementCluster {
   // checked yet, or a stale check). "False" refuses orders like cordoned.
   string ready = 8;
   string ready_message = 9;
+  // allowed_kinds are the XR kinds the cluster takes orders for (`Kind` or
+  // `Kind.group`); empty = every kind. Others are refused before the PR.
+  repeated string allowed_kinds = 10;
 }
 
 message AutoMergeRule {
