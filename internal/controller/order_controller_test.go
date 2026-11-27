@@ -159,6 +159,41 @@ func TestCancelAndClose(t *testing.T) {
 	e.wait(t, "ord-000000000005", "Ready", phase(v1alpha1.PhaseReady))
 }
 
+// TestAllowedKinds: an Order created with kubectl skips the API; the
+// controller refuses a kind outside spec.allowedKinds before the PR, and lets
+// a listed one through.
+func TestAllowedKinds(t *testing.T) {
+	e := start(t)
+	e.cluster(t, false)
+	ctx := context.Background()
+	setAllowed := func(kinds ...string) {
+		t.Helper()
+		mc := &v1alpha1.ManagementCluster{}
+		if err := e.c.Get(ctx, client.ObjectKey{Name: "machinery"}, mc); err != nil {
+			t.Fatal(err)
+		}
+		mc.Spec.AllowedKinds = kinds
+		if err := e.c.Update(ctx, mc); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The fake template renders a NativeVsphereVM.
+	setAllowed("MinioBucket")
+	e.order(t, "ord-000000000041", `{"name":"refused"}`)
+	o := e.wait(t, "ord-000000000041", "Failed", phase(v1alpha1.PhaseFailed))
+	if !strings.Contains(o.Status.Message, "machinery takes no NativeVsphereVM.resources.stuttgart-things.com orders (allowedKinds: MinioBucket)") {
+		t.Errorf("message %q", o.Status.Message)
+	}
+	if len(e.git.Pulls()) != 0 {
+		t.Fatalf("a PR was opened: %+v", e.git.Pulls())
+	}
+
+	setAllowed("MinioBucket", "NativeVsphereVM")
+	e.order(t, "ord-000000000042", `{"name":"listed"}`)
+	e.wait(t, "ord-000000000042", "PROpen", phase(v1alpha1.PhasePROpen))
+}
+
 func TestFailures(t *testing.T) {
 	e := start(t)
 	e.cluster(t, false)

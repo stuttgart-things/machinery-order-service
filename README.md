@@ -152,8 +152,8 @@ Group `order.machinery.stuttgart-things.com/v1alpha1`, CRDs in
   `flux.{name, namespace, kind, revisionField}`,
   `autoMerge.{method, rules[].{name, users, groups, templates, parameters, parameterPrefixes, actions, maxLifetime}}`
   (`actions`: `order`, `teardown`; empty = `[order]`; `maxLifetime` needs `teardown`),
-  `cordoned`. Status: the health conditions below, `checkedAt`,
-  `observedGeneration`, `capabilities` (below).
+  `cordoned`, `allowedKinds` (below). Status: the health conditions below,
+  `checkedAt`, `observedGeneration`, `capabilities` (below).
 
 ### Cluster health
 
@@ -174,6 +174,32 @@ machinery's watch set, or a check older than 5 minutes (`checkedAt`; the
 service is not checking). The service never cordons a cluster itself.
 
 `kubectl get mc` shows `Ready`; `kubectl get mc <name> -o yaml` the reasons.
+
+### Allowed kinds
+
+`spec.allowedKinds` limits which XR kinds a cluster takes orders for, as
+`Kind` (any group) or `Kind.group`:
+
+```yaml
+spec:
+  allowedKinds: [MinioBucket]   # or MinioBucket.storage.stuttgart-things.com
+```
+
+Empty or unset: every kind, as before. An order whose rendered XR is not
+listed is refused before its pull request: `POST /api/v1/orders` and gRPC
+`CreateOrder` answer 400 (`<cluster> takes no <Kind>.<group> orders
+(allowedKinds: …)`, also in `fields.managementCluster`) and create no Order;
+an Order created with kubectl ends `Failed`. Unlike the capabilities below it
+is configuration, so it applies always, also while machinery is unreachable.
+
+It is about **kinds, not templates**: which kinds a cluster builds is
+infrastructure and belongs to the cluster; who may order which template is
+the template's `orderRoles` in claim-machinery-api (later the
+PlacementPolicy). Shown in `kubectl get mc` (column `Allowed`),
+`GET /api/v1/management-clusters` (`allowedKinds`) and gRPC
+`ListManagementClusters` (`allowed_kinds`). The scheduler (#25) is to use it
+as a filter when it picks a cluster, next to `cordoned`, `Ready` and
+`capabilities`.
 
 ### Capabilities
 

@@ -629,6 +629,67 @@ func TestCapabilitiesIntake(t *testing.T) {
 	t.Error("vsphere not listed")
 }
 
+// TestAllowedKindsIntake: spec.allowedKinds refuses other kinds before the
+// pull request and without an Order; empty allows every kind; the listing
+// shows the list. Unlike capabilities it needs no observation from machinery.
+func TestAllowedKindsIntake(t *testing.T) {
+	s := newSetup(t, false)
+	ctx := context.Background()
+	for name, allowed := range map[string][]string{
+		"open":         nil,
+		"vm-ok":        {"NativeVsphereVM"},
+		"vm-group-ok":  {"NativeVsphereVM.resources.stuttgart-things.com"},
+		"buckets-only": {"MinioBucket"},
+	} {
+		if err := s.c.Create(ctx, &v1alpha1.ManagementCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: name},
+			Spec:       v1alpha1.ManagementClusterSpec{AllowedKinds: allowed},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	orders := func() int {
+		var l v1alpha1.OrderList
+		if err := s.c.List(ctx, &l); err != nil {
+			t.Fatal(err)
+		}
+		return len(l.Items)
+	}
+	// rendertest renders a NativeVsphereVM (resources.stuttgart-things.com/v1alpha1).
+	order := func(cluster, name string) (*httptest.ResponseRecorder, map[string]any) {
+		return s.do(t, "POST", "/api/v1/orders", "", map[string]any{
+			"template": "native-vm-labda-vsphere", "managementCluster": cluster, "parameters": map[string]any{"name": name},
+		})
+	}
+	before := orders()
+	rec, out := order("buckets-only", "a")
+	want := "buckets-only takes no NativeVsphereVM.resources.stuttgart-things.com orders (allowedKinds: MinioBucket)"
+	if rec.Code != http.StatusBadRequest || out["error"] != want || out["fields"].(map[string]any)["managementCluster"] != want {
+		t.Errorf("buckets-only: %d %v", rec.Code, out)
+	}
+	if n := orders(); n != before {
+		t.Errorf("a refused order was created: %d orders, want %d", n, before)
+	}
+	for i, cluster := range []string{"open", "vm-ok", "vm-group-ok"} {
+		if rec, _ := order(cluster, fmt.Sprintf("b%d", i)); rec.Code != http.StatusCreated {
+			t.Errorf("%s: %d %s", cluster, rec.Code, rec.Body)
+		}
+	}
+
+	_, out = s.do(t, "GET", "/api/v1/management-clusters", "", nil)
+	seen := map[string]any{}
+	for _, it := range out["items"].([]any) {
+		m := it.(map[string]any)
+		seen[m["name"].(string)] = m["allowedKinds"]
+	}
+	if got, _ := seen["buckets-only"].([]any); len(got) != 1 || got[0] != "MinioBucket" {
+		t.Errorf("allowedKinds of buckets-only in the listing: %v", seen["buckets-only"])
+	}
+	if got, ok := seen["open"]; !ok || got != nil {
+		t.Errorf("open: listed %v, allowedKinds %v (want listed, none)", ok, got)
+	}
+}
+
 // TestEnvironmentIntake: an XR whose spec.environmentConfig matches no
 // EnvironmentConfig label on the cluster is refused (machinery#117).
 func TestEnvironmentIntake(t *testing.T) {

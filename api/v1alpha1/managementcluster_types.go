@@ -181,6 +181,22 @@ type ManagementClusterSpec struct {
 	// Cordoned refuses new orders.
 	// +optional
 	Cordoned bool `json:"cordoned,omitempty"`
+	// AllowedKinds are the XR kinds this cluster takes orders for, as
+	// `Kind` (any group) or `Kind.group` (e.g. `MinioBucket` or
+	// `MinioBucket.storage.stuttgart-things.com`). Empty: every kind
+	// (as before). An order whose rendered XR is not listed is refused
+	// before its pull request (REST/gRPC: 400; a kubectl Order: Failed).
+	//
+	// Which kinds a cluster builds is infrastructure, so it is set here;
+	// who may order which template is the template's orderRoles
+	// (claim-machinery-api). The scheduler (#25) will use AllowedKinds as a
+	// filter when it picks a cluster, next to Cordoned, Ready and
+	// status.capabilities.
+	// +optional
+	// +kubebuilder:validation:MaxItems=32
+	// +kubebuilder:validation:items:Pattern=`^[A-Z][A-Za-z0-9]*(\.[a-z0-9]([-a-z0-9.]*[a-z0-9])?)?$`
+	// +listType=set
+	AllowedKinds []string `json:"allowedKinds,omitempty"`
 }
 
 // ManagementClusterStatus is what the service last saw of the cluster,
@@ -255,6 +271,7 @@ type OfferedKind struct {
 // +kubebuilder:printcolumn:name="Lab",type=string,JSONPath=`.spec.lab`
 // +kubebuilder:printcolumn:name="Orders",type=string,JSONPath=`.spec.gitops.ordersPath`
 // +kubebuilder:printcolumn:name="Cordoned",type=boolean,JSONPath=`.spec.cordoned`
+// +kubebuilder:printcolumn:name="Allowed",type=string,JSONPath=`.spec.allowedKinds`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 type ManagementCluster struct {

@@ -346,7 +346,7 @@ func (s *Server) ListManagementClusters(ctx context.Context, _ *orderv1.ListMana
 	for _, c := range cs {
 		mc := &orderv1.ManagementCluster{
 			Name: c.Name, Lab: c.Lab, Cordoned: c.Cordoned, Repository: c.Repository, OrdersPath: c.OrdersPath,
-			Ready: c.Ready, ReadyMessage: c.ReadyMessage,
+			Ready: c.Ready, ReadyMessage: c.ReadyMessage, AllowedKinds: c.AllowedKinds,
 		}
 		if am := c.AutoMerge; am != nil {
 			mc.AutoMergeMethod = am.Method

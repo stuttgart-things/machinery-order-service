@@ -461,10 +461,20 @@ func (s *Server) Create(ctx context.Context, c *Caller, req CreateRequest) (int,
 		return http.StatusBadGateway, ErrorResponse{Error: err.Error()}
 	}
 	o.Spec.Rendered = rd
-	if xr, err := intake.XRRef(rd); err == nil {
-		if why := capabilities.Check(mc, capabilities.XR{APIVersion: xr.APIVersion, Kind: xr.Kind, Environment: intake.XREnvironment(rd)}, time.Now()); why != "" {
+	xr, xrErr := intake.XRRef(rd)
+	if xrErr == nil {
+		x := capabilities.XR{APIVersion: xr.APIVersion, Kind: xr.Kind, Environment: intake.XREnvironment(rd)}
+		// The cluster's allowedKinds first: configuration, always applies.
+		if why := capabilities.Allowed(mc, x); why != "" {
 			return http.StatusBadRequest, ErrorResponse{Error: why, Fields: map[string]string{"managementCluster": why}}
 		}
+		if why := capabilities.Check(mc, x, time.Now()); why != "" {
+			return http.StatusBadRequest, ErrorResponse{Error: why, Fields: map[string]string{"managementCluster": why}}
+		}
+	} else if len(mc.Spec.AllowedKinds) > 0 {
+		// No XR to check against the allow list: refuse rather than let it pass.
+		why := fmt.Sprintf("%s takes only %s orders; the render has no XR: %v", mc.Name, strings.Join(mc.Spec.AllowedKinds, ", "), xrErr)
+		return http.StatusBadRequest, ErrorResponse{Error: why, Fields: map[string]string{"managementCluster": why}}
 	}
 	if req.AutoMerge {
 		rule, why := automerge.Find(mc.Spec.AutoMerge, v1alpha1.ActionOrder, requestedBy, requestedByGroups, req.Template, automerge.Params(rd))
@@ -831,6 +841,9 @@ type ClusterInfo struct {
 	// Conditions are the cluster's health conditions as last checked.
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	CheckedAt  *metav1.Time       `json:"checkedAt,omitempty"`
+	// AllowedKinds are the XR kinds the cluster takes orders for; empty =
+	// every kind.
+	AllowedKinds []string `json:"allowedKinds,omitempty"`
 	// Capabilities are the kinds and EnvironmentConfigs the cluster has (#32).
 	Capabilities *v1alpha1.Capabilities `json:"capabilities,omitempty"`
 }
@@ -852,6 +865,7 @@ func (s *Server) Clusters(ctx context.Context) ([]ClusterInfo, error) {
 			AutoMerge: mc.Spec.AutoMerge,
 			Ready:     string(ready), ReadyMessage: msg,
 			Conditions: mc.Status.Conditions, CheckedAt: mc.Status.CheckedAt,
+			AllowedKinds: mc.Spec.AllowedKinds,
 			Capabilities: mc.Status.Capabilities,
 		})
 	}
