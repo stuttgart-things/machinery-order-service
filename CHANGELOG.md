@@ -1,3 +1,10 @@
+# [0.12.0](https://github.com/stuttgart-things/machinery-order-service/compare/v0.11.0...v0.12.0) (2026-11-27)
+
+
+### Features
+
+* ManagementCluster spec.allowedKinds limits the XR kinds a cluster takes orders for ([#39](https://github.com/stuttgart-things/machinery-order-service/issues/39)) ([#40](https://github.com/stuttgart-things/machinery-order-service/issues/40)) ([7fbdda5](https://github.com/stuttgart-things/machinery-order-service/commit/7fbdda5986e61fbd962d8665a5c68e26b318cbba)), closes [#25](https://github.com/stuttgart-things/machinery-order-service/issues/25)
+
 # [0.11.0](https://github.com/stuttgart-things/machinery-order-service/compare/v0.10.0...v0.11.0) (2026-11-25)
 
 
