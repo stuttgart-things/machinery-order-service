@@ -63,7 +63,7 @@ on the base branch.
 | `POST` | `/api/v1/orders/{id}/cancel` | `{"resourceVersion"}` optional: 409 when the order moved. Only before the merge, by whoever may see it |
 | `POST` | `/api/v1/orders/{id}/teardown` | `{"reason", "autoMerge", "resourceVersion"}` → 202. Only merged orders, by whoever may see them; 409 before the merge, while a teardown runs or after one completed; 403 when `autoMerge` is asked by someone other than the orderer or matches no rule with `actions: [teardown]` |
 | `POST` | `/api/v1/recover` | `{"managementCluster", "dryRun"}` (no cluster = all) → 200 `{"results": [{"managementCluster", "existing", "recovered", "skipped"}]}`. Admins only (403). Rebuilds the Orders whose CRs are gone from the order files on the base branch: same order ID, `requested-by` from the file, files and pull request from the `Order-Id:` commit, phase `Recovered`. Open pull requests with an `Order-Id:` trailer are picked up too: an unmerged order starts in `PROpen`, an order with an open `delete-claim/...` PR in `TeardownPROpen`. `dryRun` creates nothing ([ADR 0004](docs/adr/0004-recover-adopt.md)) |
-| `POST` | `/api/v1/adopt` | `{"managementCluster", "path", "template", "parameters", "reason", "dryRun"}` → 201 (dry run 200) `{"orderID", "path", "kind", "name", "template", "added"}`. Admins only. Takes over the hand-written XR in `path` as an order: a pull request `adopt/<xr>` adds only the `order-id` label and annotation and the `template` annotation. `template` optional (checked: its rendered XR must be of the XR's kind), else `adopted:<Kind>`. Refused: `spec.adoptExclude` of the cluster (403), a kind outside `allowedKinds`, an XR with an order-id already (409), a file in the orders directory ([ADR 0004](docs/adr/0004-recover-adopt.md)) |
+| `POST` | `/api/v1/adopt` | `{"managementCluster", "path", "template", "parameters", "reason", "dryRun"}` → 201 (dry run 200) `{"orderID", "path", "kind", "name", "template", "added"}`. Admins only, and only where the cluster opens it: `spec.adoptKinds` (empty = off, 403) and a file in `spec.adoptPaths`. Takes over the hand-written XR in `path` as an order: a pull request `adopt/<xr>` adds only the `order-id` label and annotation and the `template` annotation. `template` optional (checked: its rendered XR must be of the XR's kind), else `adopted:<Kind>`. Refused: `spec.adoptExclude` of the cluster (403), a kind outside `allowedKinds`, an XR with an order-id already (409), a file in the orders directory ([ADR 0004](docs/adr/0004-recover-adopt.md)) |
 | `GET` | `/api/v1/management-clusters` | `{"items": [{"name", "lab", "cordoned", "ready", "readyMessage", "conditions", "checkedAt", "capabilities", "repository", "ordersPath", "autoMerge"}]}`: where orders can go, whether the cluster is healthy, what it can build, and who may auto-merge what |
 | `GET` | `/ui/` | **My orders**, live through SSE |
 | `GET` | `/ui/?scope=all` | **All orders** (admins) or **All I may see** (own + the teams', ADR 0001), with orderer and group; `group=<group>` (or `-` for none) keeps one group, `sort=group` groups the rows. Group = the order's `owner`, else the orderer's groups at order time |
@@ -155,7 +155,7 @@ Group `order.machinery.stuttgart-things.com/v1alpha1`, CRDs in
   `flux.{name, namespace, kind, revisionField}`,
   `autoMerge.{method, rules[].{name, users, groups, templates, parameters, parameterPrefixes, actions, maxLifetime}}`
   (`actions`: `order`, `teardown`; empty = `[order]`; `maxLifetime` needs `teardown`),
-  `cordoned`, `allowedKinds` (below), `adoptExclude` (XR names `POST /api/v1/adopt` refuses, ADR 0004). Status: the health conditions below,
+  `cordoned`, `allowedKinds` (below), `adoptKinds` (kinds `POST /api/v1/adopt` may take; empty = adopt off), `adoptPaths` (directories of the hand-written XRs: adopt takes files from there, recovery reads them too), `adoptExclude` (XR names adopt refuses), ADR 0004. Status: the health conditions below,
   `checkedAt`, `observedGeneration`, `capabilities` (below).
 
 ### Cluster health
@@ -336,9 +336,9 @@ Tests use fakes for everything outside: `internal/delivery/githubfake`
 
 ## Not here yet
 
-- recovering an adopted order whose CR is lost (recovery reads only the
-  orders directory, [ADR 0004](docs/adr/0004-recover-adopt.md)); finding XRs by
-  order-id in machinery itself is stuttgart-things/machinery#116
+- adopting ClusterStacks: only once `hack/claim-deletion.py` in the fleet
+  repo can tear them down ([ADR 0004](docs/adr/0004-recover-adopt.md)); finding
+  XRs by order-id in machinery itself is stuttgart-things/machinery#116
 - the scheduler (InfraTarget, PlacementPolicy, capacity):
   stuttgart-things/stuttgart-things#4298, stuttgart-things/stuttgart-things#4299
 - UI stages 2–4 (stuttgart-things/stuttgart-things#4300); a direct ZITADEL

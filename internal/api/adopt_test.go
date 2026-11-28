@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/stuttgart-things/machinery-order-service/api/v1alpha1"
@@ -41,8 +42,10 @@ func TestAdopt(t *testing.T) {
 
 	vm, bucket, excluded := handXR("NativeVsphereVM", "hand-vm"), handXR("MinioBucket", "data"), handXR("NativeVsphereVM", "keep-out")
 	owned := strings.Replace(handXR("NativeVsphereVM", "owned"), "  annotations:\n", "  annotations:\n    stuttgart-things.com/order-id: ord-0000000000cc\n", 1)
+	stack := strings.Replace(handXR("ClusterStack", "stack"), "resources.stuttgart-things.com", "config.stuttgart-things.com", 1)
 	git := githubfake.New("stuttgart-things", "stuttgart-things", map[string]string{
 		xrsDir + "hand-vm.yaml": vm, xrsDir + "data.yaml": bucket, xrsDir + "keep-out.yaml": excluded, xrsDir + "owned.yaml": owned,
+		xrsDir + "stack.yaml": stack,
 	})
 	t.Cleanup(git.Close)
 	gh, err := delivery.New(git.URL, http.DefaultClient)
@@ -55,7 +58,15 @@ func TestAdopt(t *testing.T) {
 		t.Fatal(err)
 	}
 	mc.Spec.AdoptExclude = []string{"keep-out"}
+	mc.Spec.AdoptKinds = []string{"NativeVsphereVM", "MinioBucket"}
+	mc.Spec.AdoptPaths = []string{xrsDir}
 	if err := s.c.Update(ctx, mc); err != nil {
+		t.Fatal(err)
+	}
+	// a cluster without adoptKinds: adopt is off there
+	off := &v1alpha1.ManagementCluster{ObjectMeta: metav1.ObjectMeta{Name: "off"},
+		Spec: v1alpha1.ManagementClusterSpec{AdoptPaths: []string{xrsDir}}}
+	if err := s.c.Create(ctx, off); err != nil {
 		t.Fatal(err)
 	}
 
@@ -73,6 +84,9 @@ func TestAdopt(t *testing.T) {
 		msg   string
 	}{
 		"not admin":      {alice, req("hand-vm.yaml", nil), 403, "admins"},
+		"adopt off":      {admin, map[string]any{"managementCluster": "off", "path": xrsDir + "hand-vm.yaml"}, 403, "adoptKinds is empty"},
+		"kind not given": {admin, req("stack.yaml", nil), 403, "adopts no ClusterStack.config.stuttgart-things.com"},
+		"not adoptPaths": {admin, map[string]any{"managementCluster": "machinery", "path": "clusters/labda/vsphere/other/x.yaml"}, 400, "spec.adoptPaths"},
 		"excluded":       {admin, req("keep-out.yaml", nil), 403, "adoptExclude"},
 		"an order":       {admin, req("owned.yaml", nil), 409, "ord-0000000000cc"},
 		"orders dir":     {admin, map[string]any{"managementCluster": "machinery", "path": "clusters/labda/vsphere/machinery-orders-xrs/x.yaml"}, 400, "orders directory"},

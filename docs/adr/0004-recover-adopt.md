@@ -92,7 +92,18 @@ pull requests without a trailer (opened by hand or by the claims CLI).
 `POST /api/v1/adopt` (`{"managementCluster", "path", "template",
 "parameters", "reason", "dryRun"}`), admins only, takes over the XR in
 `path` on the base branch: the one document there that names its own file
-(`source-path`). The service opens a pull request (branch `adopt/<xr>`,
+(`source-path`).
+
+**Adopt is off until a cluster opens it.** `spec.adoptKinds` of the
+ManagementCluster lists the kinds it may adopt (written like
+`allowedKinds`); empty = adopt is off there (403). `spec.adoptPaths` lists
+the directories of its hand-written XRs; adopt takes files only from
+there. Nothing about which XRs or kinds is in the code. A kind goes into
+`adoptKinds` only once the fleet repo can tear it down: **ClusterStack stays
+out until `hack/claim-deletion.py` can remove one** (today it refuses them,
+`hack/teardown-clusterstack.sh` is the way); an adopted ClusterStack could
+not be torn down through the service. Starting values: LabDA `machinery`
+`[MinioBucket]`, LabUL `machinery-labul` `[NativeProxmoxVM, MinioBucket]`. The service opens a pull request (branch `adopt/<xr>`,
 `chore(machinery): adopt <Kind> <name> as order <id>`) that replaces the file
 with **only three additions**: the `order-id` label, the `order-id`
 annotation and the `template` annotation (one-line edits, the rest of the
@@ -105,18 +116,20 @@ would add, and creates nothing.
   XR's name plus `parameters`) and refuses it when the rendered XR is of
   another kind or API group. Not given: `adopted:<Kind>`, so the origin
   stays visible (`recovered:<Kind>` is recovery's).
-- **Refused**: XR names in the ManagementCluster's `spec.adoptExclude`
-  (403) -- the exclusions live with the cluster, not in the code; a kind
-  outside `spec.allowedKinds`; an XR with an `order-id` already (409:
+- **Refused**: a cluster with empty `adoptKinds` or a kind not in it (403);
+  a file outside `adoptPaths`; XR names in the ManagementCluster's
+  `spec.adoptExclude` (403) -- the exclusions live with the cluster, not in
+  the code; a kind outside `spec.allowedKinds`; an XR with an `order-id` already (409:
   recover it); a file in the orders directory; a file another live Order
   adopts already (409); a file with no or several self-naming documents.
 - The pull request carries the SHA-256 of the file as it was adopted: if
   the file changed on the base branch since, the order ends `Failed`
   instead of overwriting the change.
 
-Not yet: recovery reads only the orders directory, so an adopted order
-whose CR is lost is not recovered (its file lives with the hand-written
-XRs). A ManagementCluster field naming those directories would close that.
+Recovery reads the `adoptPaths` besides the orders directory -- there only
+documents with an `order-id`, i.e. adopted ones -- so an adopted order whose
+CR is lost comes back with its ID (an open adopt pull request too, in
+`PROpen`).
 
 ## Consequences
 

@@ -4,7 +4,9 @@
 // file, nothing else; once it is merged the order follows the XR like any
 // order, and it can be torn down through the service.
 //
-// Refused: a cluster's spec.adoptExclude, a kind outside spec.allowedKinds,
+// Refused: a cluster without spec.adoptKinds (adopt off) or a kind not in
+// it, a file outside spec.adoptPaths, a cluster's spec.adoptExclude, a kind
+// outside spec.allowedKinds,
 // an XR that carries an order-id already (recover it instead), a file in the
 // orders directory, an XR another Order follows, and a template whose
 // rendered XR is of another kind.
@@ -81,6 +83,9 @@ func refuse(status int, format string, args ...any) error {
 // caller (user:default/<name>), token its bearer token for the test render.
 func Plan(ctx context.Context, c client.Client, git recovery.Git, r intake.Renderer, mc *v1alpha1.ManagementCluster,
 	namespace string, req Request, by, token string) (*Result, error) {
+	if len(mc.Spec.AdoptKinds) == 0 {
+		return nil, refuse(403, "adopt is off on ManagementCluster %s (spec.adoptKinds is empty)", mc.Name)
+	}
 	if err := layout.ValidatePath(req.Path); err != nil {
 		return nil, refuse(400, "path: %v", err)
 	}
@@ -89,6 +94,10 @@ func Plan(ctx context.Context, c client.Client, git recovery.Git, r intake.Rende
 	}
 	if dir := strings.TrimRight(mc.Spec.GitOps.OrdersPath, "/"); dir != "" && path.Dir(req.Path) == dir {
 		return nil, refuse(400, "%s is in the orders directory: those are orders already (POST /api/v1/recover)", req.Path)
+	}
+	if !slices.Contains(recovery.CleanDirs(mc.Spec.AdoptPaths), path.Dir(req.Path)) {
+		return nil, refuse(400, "%s is not in a directory of spec.adoptPaths of ManagementCluster %s (%s): recovery would not find the order",
+			req.Path, mc.Name, strings.Join(mc.Spec.AdoptPaths, ", "))
 	}
 	repo, base := recovery.Repository(mc)
 	content, ok, err := git.File(ctx, repo, base, req.Path)
@@ -131,7 +140,11 @@ func Plan(ctx context.Context, c client.Client, git recovery.Git, r intake.Rende
 	if mcl := xr.Annotations[layout.AnnotationManagementCluster]; mcl != "" && mcl != cluster {
 		return nil, refuse(400, "%s names management cluster %s, not %s", req.Path, mcl, cluster)
 	}
-	if why := capabilities.Allowed(mc, capabilities.XR{APIVersion: xr.APIVersion, Kind: xr.Kind}); why != "" {
+	x := capabilities.XR{APIVersion: xr.APIVersion, Kind: xr.Kind}
+	if !capabilities.Listed(mc.Spec.AdoptKinds, x) {
+		return nil, refuse(403, "ManagementCluster %s adopts no %s (adoptKinds: %s)", mc.Name, capabilities.Name(x), strings.Join(mc.Spec.AdoptKinds, ", "))
+	}
+	if why := capabilities.Allowed(mc, x); why != "" {
 		return nil, refuse(400, "%s", why)
 	}
 	// another Order (an open adopt, say) has this file already

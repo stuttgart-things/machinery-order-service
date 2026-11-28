@@ -371,6 +371,16 @@ func (in *ManagementClusterSpec) DeepCopyInto(out *ManagementClusterSpec) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
+	if in.AdoptKinds != nil {
+		in, out := &in.AdoptKinds, &out.AdoptKinds
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+	if in.AdoptPaths != nil {
+		in, out := &in.AdoptPaths, &out.AdoptPaths
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.AdoptExclude != nil {
 		in, out := &in.AdoptExclude, &out.AdoptExclude
 		*out = make([]string, len(*in))

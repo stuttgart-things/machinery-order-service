@@ -10,6 +10,7 @@ import (
 	"github.com/stuttgart-things/machinery-order-service/api/v1alpha1"
 	"github.com/stuttgart-things/machinery-order-service/internal/adopt"
 	"github.com/stuttgart-things/machinery-order-service/internal/machinery"
+	"github.com/stuttgart-things/machinery-order-service/internal/recovery"
 )
 
 // TestAdoptLifecycle: an adopted XR goes through a pull request that only
@@ -31,6 +32,11 @@ func TestAdoptLifecycle(t *testing.T) {
 
 	mc := &v1alpha1.ManagementCluster{}
 	if err := e.c.Get(ctx, client.ObjectKey{Name: "machinery"}, mc); err != nil {
+		t.Fatal(err)
+	}
+	mc.Spec.AdoptKinds = []string{"NativeVsphereVM"}
+	mc.Spec.AdoptPaths = []string{dir}
+	if err := e.c.Update(ctx, mc); err != nil {
 		t.Fatal(err)
 	}
 	res, err := adopt.Plan(ctx, e.c, e.gh, e.renderer, mc, "default", adopt.Request{ManagementCluster: "machinery", Path: dir + "hand.yaml"}, "user:default/root", "")
@@ -64,6 +70,32 @@ func TestAdoptLifecycle(t *testing.T) {
 	o := e.wait(t, res.OrderID, "Ready", phase(v1alpha1.PhaseReady))
 	if o.Status.XRRef == nil || o.Status.XRRef.Name != "hand" || o.Status.Live.Address != "10.31.103.9" {
 		t.Fatalf("status %+v", o.Status)
+	}
+
+	// The adopted order's CR is lost (no finalizer runs): recovery finds it
+	// in adoptPaths, with the same order ID.
+	adopted := res.OrderID
+	e.stop()
+	if err := e.c.Get(ctx, client.ObjectKey{Namespace: "default", Name: adopted}, o); err != nil {
+		t.Fatal(err)
+	}
+	o.Finalizers = nil
+	if err := e.c.Update(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.c.Delete(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	e.gone(t, adopted)
+	e.startManager(t)
+	rec, err := recovery.Run(ctx, e.c, e.gh, mc, "default", "user:default/root", false)
+	if err != nil || len(rec.Recovered) != 1 || rec.Recovered[0].OrderID != adopted || rec.Recovered[0].Path != dir+"hand.yaml" ||
+		rec.Recovered[0].Template != "adopted:NativeVsphereVM" {
+		t.Fatalf("recover %+v %v", rec, err)
+	}
+	o = e.wait(t, adopted, "Ready after recovery", phase(v1alpha1.PhaseReady))
+	if o.Status.History[0].Phase != v1alpha1.PhaseRecovered || o.Status.Delivery.PullRequest == nil || o.Status.Delivery.PullRequest.Number != pr {
+		t.Fatalf("recovered: %+v", o.Status)
 	}
 
 	// The file changes on main after the adopt, before the pull request.
