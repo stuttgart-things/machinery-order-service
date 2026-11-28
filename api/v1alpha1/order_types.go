@@ -161,6 +161,26 @@ type OrderSpec struct {
 	// order starts in phase Recovered.
 	// +optional
 	Recovered *RecoveredFrom `json:"recovered,omitempty"`
+	// Adopted is set when the Order takes over a hand-written XR
+	// (POST /api/v1/adopt, docs/adr/0004-recover-adopt.md): spec.rendered
+	// is the XR's file with only the order-id label and annotation and the
+	// template annotation added; the pull request replaces that file.
+	// +optional
+	Adopted *AdoptedFrom `json:"adopted,omitempty"`
+}
+
+// AdoptedFrom is the hand-written XR an Order took over.
+type AdoptedFrom struct {
+	// Path is the XR's file.
+	Path string `json:"path"`
+	// ContentSHA256 is the hex SHA-256 of the file as it was when adopted:
+	// the pull request is refused when the file changed since.
+	ContentSHA256 string `json:"contentSHA256"`
+	// By is who adopted it (user:default/<name>).
+	// +optional
+	By string `json:"by,omitempty"`
+	// At is when.
+	At metav1.Time `json:"at"`
 }
 
 // RecoveredTeardown is the open teardown pull request a recovered Order

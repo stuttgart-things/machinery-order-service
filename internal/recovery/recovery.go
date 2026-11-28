@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -105,9 +106,16 @@ func Run(ctx context.Context, c client.Client, git Git, mc *v1alpha1.ManagementC
 		return nil, fmt.Errorf("ManagementCluster %s has no spec.gitops.ordersPath", mc.Name)
 	}
 	repo, base := Repository(mc)
-	files, err := git.Dir(ctx, repo, base, dir)
-	if err != nil {
-		return nil, err
+	// the orders directory, and the hand-written XRs' (adopted orders);
+	// either way only documents with an order-id are taken
+	dirs := append([]string{dir}, CleanDirs(mc.Spec.AdoptPaths)...)
+	var files []delivery.RepoFile
+	for _, d := range slices.Compact(dirs) {
+		fs, err := git.Dir(ctx, repo, base, d)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, fs...)
 	}
 	pulls, err := git.OpenPulls(ctx, repo, base)
 	if err != nil {
@@ -170,14 +178,14 @@ func Run(ctx context.Context, c client.Client, git Git, mc *v1alpha1.ManagementC
 			if pr, ok := teardownPRs[id]; ok {
 				tpr = &pr
 			}
-			if err := build(ctx, git, mc, repo, base, dir, files, &cand, namespace, by, tpr); err != nil {
+			if err := build(ctx, git, mc, repo, base, files, &cand, namespace, by, tpr); err != nil {
 				return nil, err
 			}
 			res.Recovered = append(res.Recovered, cand)
 		}
 	}
 	// Orders not merged yet: an open pull request whose XR file goes into
-	// this cluster's directory.
+	// one of this cluster's directories (an open adopt too).
 	ids := make([]string, 0, len(orderPRs))
 	for id := range orderPRs {
 		ids = append(ids, id)
@@ -188,7 +196,7 @@ func Run(ctx context.Context, c client.Client, git Git, mc *v1alpha1.ManagementC
 		if _, onMain := seen[id]; onMain {
 			continue
 		}
-		cand, err := fromPR(ctx, git, mc, repo, dir, cluster, pr, namespace, by)
+		cand, err := fromPR(ctx, git, mc, repo, dirs, cluster, pr, namespace, by)
 		if err != nil {
 			return nil, err
 		}
@@ -227,7 +235,7 @@ func Run(ctx context.Context, c client.Client, git Git, mc *v1alpha1.ManagementC
 
 // build finds the order's commit, pull request and files and makes the
 // Order.
-func build(ctx context.Context, git Git, mc *v1alpha1.ManagementCluster, repo, base, dir string, dirFiles []delivery.RepoFile,
+func build(ctx context.Context, git Git, mc *v1alpha1.ManagementCluster, repo, base string, dirFiles []delivery.RepoFile,
 	cand *Candidate, namespace, by string, teardown *delivery.OpenPR) error {
 	origin, err := git.Origin(ctx, repo, base, cand.Path, cand.OrderID)
 	if err != nil {
@@ -245,7 +253,9 @@ func build(ctx context.Context, git Git, mc *v1alpha1.ManagementCluster, repo, b
 		paths = append(paths, origin.Files...)
 	} else {
 		for _, f := range dirFiles {
-			paths = append(paths, f.Path)
+			if path.Dir(f.Path) == path.Dir(cand.Path) {
+				paths = append(paths, f.Path)
+			}
 		}
 	}
 	sort.Strings(paths)
@@ -253,7 +263,7 @@ func build(ctx context.Context, git Git, mc *v1alpha1.ManagementCluster, repo, b
 	var rest []v1alpha1.RenderedFile
 	for _, p := range paths {
 		text, ok := content[p]
-		if !ok && path.Dir(p) != dir {
+		if !ok {
 			if text, ok, err = git.File(ctx, repo, base, p); err != nil {
 				return err
 			}
@@ -304,7 +314,7 @@ func build(ctx context.Context, git Git, mc *v1alpha1.ManagementCluster, repo, b
 
 // fromPR makes the Order of an open order pull request: its files as on the
 // branch head. nil when the pull request is not an order of this cluster.
-func fromPR(ctx context.Context, git Git, mc *v1alpha1.ManagementCluster, repo, dir, cluster string, pr delivery.OpenPR,
+func fromPR(ctx context.Context, git Git, mc *v1alpha1.ManagementCluster, repo string, dirs []string, cluster string, pr delivery.OpenPR,
 	namespace, by string) (*Candidate, error) {
 	rd := &v1alpha1.Rendered{RenderedAt: metav1.NewTime(time.Now().UTC().Truncate(time.Second))}
 	var cand *Candidate
@@ -324,7 +334,7 @@ func fromPR(ctx context.Context, git Git, mc *v1alpha1.ManagementCluster, repo, 
 		isXR := false
 		for _, d := range docs {
 			if cand == nil && d.Annotations[v1alpha1.OrderIDKey] == pr.OrderID && d.Annotations[layout.AnnotationSourcePath] == f.Path {
-				if path.Dir(f.Path) != dir {
+				if !slices.Contains(dirs, path.Dir(f.Path)) {
 					return nil, nil // another cluster's order
 				}
 				cand = &Candidate{OrderID: pr.OrderID, Path: f.Path, Kind: d.Kind, Name: d.Name, Namespace: d.Namespace,
@@ -388,6 +398,18 @@ func newOrder(cand *Candidate, mc *v1alpha1.ManagementCluster, namespace string,
 		o.Annotations = map[string]string{v1alpha1.RequestedByKey: cand.RequestedBy}
 	}
 	return o
+}
+
+// CleanDirs trims the trailing slashes of directory paths and drops empty
+// ones.
+func CleanDirs(dirs []string) []string {
+	var out []string
+	for _, d := range dirs {
+		if d = strings.TrimRight(d, "/"); d != "" {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 // carries reports whether a document of text is annotated with order-id id.

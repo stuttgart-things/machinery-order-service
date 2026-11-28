@@ -7,6 +7,7 @@
 //	POST /api/v1/orders/{id}/cancel     cancel before the merge
 //	POST /api/v1/orders/{id}/teardown   remove what a merged order built (ADR 0003)
 //	POST /api/v1/recover                rebuild lost Orders from git, admins (ADR 0004)
+//	POST /api/v1/adopt                  take over a hand-written XR as an order, admins (ADR 0004)
 //	GET  /api/v1/management-clusters    where orders can go
 //	GET  /health, /ready, /version
 //
@@ -34,6 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/stuttgart-things/machinery-order-service/api/v1alpha1"
+	"github.com/stuttgart-things/machinery-order-service/internal/adopt"
 	"github.com/stuttgart-things/machinery-order-service/internal/auth"
 	"github.com/stuttgart-things/machinery-order-service/internal/automerge"
 	"github.com/stuttgart-things/machinery-order-service/internal/capabilities"
@@ -124,6 +126,7 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("POST "+p+"/api/v1/orders/{id}/cancel", s.cancel)
 		mux.HandleFunc("POST "+p+"/api/v1/orders/{id}/teardown", s.teardown)
 		mux.HandleFunc("POST "+p+"/api/v1/recover", s.recover)
+		mux.HandleFunc("POST "+p+"/api/v1/adopt", s.adopt)
 		mux.HandleFunc("GET "+p+"/api/v1/management-clusters", s.clusters)
 		mux.HandleFunc("GET "+p+"/health", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, map[string]string{"status": "ok"}) })
 		mux.HandleFunc("GET "+p+"/ready", s.ready)
@@ -416,6 +419,71 @@ func (s *Server) Recover(ctx context.Context, c *Caller, req RecoverRequest) (in
 		out.Results = append(out.Results, *res)
 	}
 	return http.StatusOK, out
+}
+
+// Adopt takes over a hand-written XR as an order (#4823): a pull request
+// adds only the order-id label and annotation and the template annotation.
+// Admins only; dryRun shows what would be added and creates nothing.
+func (s *Server) Adopt(ctx context.Context, c *Caller, req adopt.Request) (int, any) {
+	if s.Git == nil {
+		return http.StatusNotImplemented, ErrorResponse{Error: "adopt is not configured"}
+	}
+	if !s.IsAdmin(c) {
+		return http.StatusForbidden, ErrorResponse{Error: "adopting XRs is for admins"}
+	}
+	if req.ManagementCluster == "" || req.Path == "" {
+		return http.StatusBadRequest, ErrorResponse{Error: "managementCluster and path are required"}
+	}
+	mc := &v1alpha1.ManagementCluster{}
+	if err := s.Client.Get(ctx, types.NamespacedName{Name: req.ManagementCluster}, mc); err != nil {
+		if apierrors.IsNotFound(err) {
+			return http.StatusBadRequest, ErrorResponse{Error: fmt.Sprintf("unknown management cluster %q", req.ManagementCluster)}
+		}
+		return http.StatusInternalServerError, ErrorResponse{Error: err.Error()}
+	}
+	if mc.Spec.Cordoned {
+		return http.StatusConflict, ErrorResponse{Error: fmt.Sprintf("ManagementCluster %s is cordoned", mc.Name)}
+	}
+	by, token := "", ""
+	if c != nil {
+		token = c.Token
+		if c.ID != nil {
+			by = c.Ref
+		}
+	}
+	res, err := adopt.Plan(ctx, s.Client, s.Git, s.Renderer, mc, s.Namespace, req, by, token)
+	if err != nil {
+		var ae *adopt.Error
+		if errors.As(err, &ae) {
+			return ae.Status, ErrorResponse{Error: ae.Msg}
+		}
+		return http.StatusBadGateway, ErrorResponse{Error: err.Error()}
+	}
+	if req.DryRun {
+		return http.StatusOK, res
+	}
+	if err := s.Client.Create(ctx, res.Order); err != nil {
+		return http.StatusInternalServerError, ErrorResponse{Error: err.Error()}
+	}
+	slog.Info("XR adopted", "order", res.OrderID, "cluster", mc.Name, "path", res.Path, "template", res.Template, "by", by)
+	s.markAccepted(ctx, res.Order)
+	return http.StatusCreated, res
+}
+
+func (s *Server) adopt(w http.ResponseWriter, r *http.Request) {
+	c, ok := s.Authorize(w, r, false)
+	if !ok {
+		return
+	}
+	var req adopt.Request
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+		return
+	}
+	status, body := s.Adopt(r.Context(), c, req)
+	writeJSON(w, status, body)
 }
 
 func (s *Server) recover(w http.ResponseWriter, r *http.Request) {

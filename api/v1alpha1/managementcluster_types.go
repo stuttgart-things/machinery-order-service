@@ -197,6 +197,31 @@ type ManagementClusterSpec struct {
 	// +kubebuilder:validation:items:Pattern=`^[A-Z][A-Za-z0-9]*(\.[a-z0-9]([-a-z0-9.]*[a-z0-9])?)?$`
 	// +listType=set
 	AllowedKinds []string `json:"allowedKinds,omitempty"`
+	// AdoptKinds are the XR kinds POST /api/v1/adopt may take over on this
+	// cluster, written like allowedKinds. Empty: adopt is off (403). A kind
+	// goes in only once its teardown works through the fleet repo -- not
+	// ClusterStack (hack/claim-deletion.py refuses it,
+	// docs/adr/0004-recover-adopt.md).
+	// +optional
+	// +kubebuilder:validation:MaxItems=32
+	// +kubebuilder:validation:items:Pattern=`^[A-Z][A-Za-z0-9]*(\.[a-z0-9]([-a-z0-9.]*[a-z0-9])?)?$`
+	// +listType=set
+	AdoptKinds []string `json:"adoptKinds,omitempty"`
+	// AdoptPaths are the repository directories of this cluster's
+	// hand-written XRs. Adopt takes files from these only, and recovery
+	// reads them besides ordersPath -- there only files with an order-id,
+	// so an adopted order whose CR is lost comes back.
+	// +optional
+	// +kubebuilder:validation:MaxItems=16
+	// +listType=set
+	AdoptPaths []string `json:"adoptPaths,omitempty"`
+	// AdoptExclude are XR names (metadata.name) that POST /api/v1/adopt
+	// refuses on this cluster: hand-written XRs the service must not take
+	// over (docs/adr/0004-recover-adopt.md).
+	// +optional
+	// +kubebuilder:validation:MaxItems=128
+	// +listType=set
+	AdoptExclude []string `json:"adoptExclude,omitempty"`
 }
 
 // ManagementClusterStatus is what the service last saw of the cluster,
