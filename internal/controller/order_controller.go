@@ -403,13 +403,18 @@ func (r *OrderReconciler) deliver(ctx context.Context, o *v1alpha1.Order) (ctrl.
 	o.Status.XRRef = xr
 	o.Status.Files = intake.Paths(rd)
 
-	tmpl, err := intake.For(r.Renderer, mc).Template(ctx, o.Spec.Template, "")
-	if err != nil {
-		return fail(o, "reading the template", err)
-	}
-	conv, err := intake.ConventionFor(o, rd, tmpl)
-	if err != nil {
-		return fail(o, "pull request", err)
+	var conv intake.Convention
+	if o.Spec.Adopted != nil {
+		// adopt: the template may be a placeholder (adopted:<Kind>)
+		conv = intake.AdoptConventionFor(o, xr)
+	} else {
+		tmpl, err := intake.For(r.Renderer, mc).Template(ctx, o.Spec.Template, "")
+		if err != nil {
+			return fail(o, "reading the template", err)
+		}
+		if conv, err = intake.ConventionFor(o, rd, tmpl); err != nil {
+			return fail(o, "pull request", err)
+		}
 	}
 	repo := mc.Spec.GitOps.Repository
 	if repo == "" {
@@ -430,7 +435,11 @@ func (r *OrderReconciler) deliver(ctx context.Context, o *v1alpha1.Order) (ctrl.
 		Title: conv.Title, Body: body, OrderID: o.Name,
 	}
 	for _, f := range rd.Files {
-		req.Files = append(req.Files, delivery.File{Path: f.Path, Content: f.Content})
+		df := delivery.File{Path: f.Path, Content: f.Content}
+		if a := o.Spec.Adopted; a != nil && f.Path == a.Path {
+			df.Replace, df.BaseSHA256 = true, a.ContentSHA256
+		}
+		req.Files = append(req.Files, df)
 	}
 	res, err := r.Git.Open(ctx, req)
 	if err != nil {

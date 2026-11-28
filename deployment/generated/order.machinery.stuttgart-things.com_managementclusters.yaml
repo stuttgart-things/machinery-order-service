@@ -62,6 +62,16 @@ spec:
               ManagementClusterSpec describes a cluster that applies orders: Flux pulls
               its orders directory, Crossplane builds the XRs.
             properties:
+              adoptExclude:
+                description: |-
+                  AdoptExclude are XR names (metadata.name) that POST /api/v1/adopt
+                  refuses on this cluster: hand-written XRs the service must not take
+                  over (docs/adr/0004-recover-adopt.md).
+                items:
+                  type: string
+                maxItems: 128
+                type: array
+                x-kubernetes-list-type: set
               allowedKinds:
                 description: |-
                   AllowedKinds are the XR kinds this cluster takes orders for, as

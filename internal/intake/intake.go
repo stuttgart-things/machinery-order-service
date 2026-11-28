@@ -414,3 +414,30 @@ func TeardownConventionFor(o *v1alpha1.Order, files []string) Convention {
 		Body:   b.String(),
 	}
 }
+
+// AdoptConventionFor is the pull request that hands a hand-written XR to
+// the order (docs/adr/0004-recover-adopt.md): branch adopt/<xr>, the file
+// with only the order-id label and annotation and the template annotation
+// added.
+func AdoptConventionFor(o *v1alpha1.Order, xr *v1alpha1.ObjectRef) Convention {
+	a := o.Spec.Adopted
+	var b strings.Builder
+	_, _ = fmt.Fprintf(&b, "Hands the hand-written `%s` `%s` to machinery-order-service as order `%s`.\n\n", xr.Kind, xr.Name, o.Name)
+	_, _ = fmt.Fprintf(&b, "The only change to `%s`:\n\n", a.Path)
+	_, _ = fmt.Fprintf(&b, "- label and annotation `%s: %s`\n", v1alpha1.OrderIDKey, o.Name)
+	_, _ = fmt.Fprintf(&b, "- annotation `%s: %s`\n\n", v1alpha1.TemplateKey, o.Spec.Template)
+	b.WriteString("**Merging changes nothing on the cluster** but the XR's label and annotations. From then on the order " +
+		"follows the XR (`claims orders get`), and it can be torn down through the service like any order.\n")
+	if a.By != "" {
+		_, _ = fmt.Fprintf(&b, "\nAdopted by `%s`.", a.By)
+	}
+	if o.Spec.Reason != "" {
+		b.WriteString("\n\nReason: " + o.Spec.Reason)
+	}
+	_, _ = fmt.Fprintf(&b, "\n\nOrder ID: `%s`\n\n---\n*Opened by machinery-order-service (adopt)*\n", o.Name)
+	return Convention{
+		Branch: "adopt/" + xr.Name,
+		Title:  fmt.Sprintf("chore(machinery): adopt %s %s as order %s", xr.Kind, xr.Name, o.Name),
+		Body:   b.String(),
+	}
+}

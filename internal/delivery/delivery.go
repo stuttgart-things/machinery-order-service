@@ -10,6 +10,8 @@ package delivery
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -33,6 +35,11 @@ type File struct {
 	Path    string
 	Content string
 	Delete  bool
+	// Replace changes a file that exists on the base branch (adopt): its
+	// content there must still have the hex SHA-256 BaseSHA256, and no
+	// kustomization.yaml is touched.
+	Replace    bool
+	BaseSHA256 string
 }
 
 // Request is one order to deliver as a pull request.
@@ -309,11 +316,19 @@ func (g *GitHub) commit(ctx context.Context, owner, repo string, r Request, res 
 		if err := layout.ValidatePath(f.Path); err != nil {
 			return &ConflictError{Msg: err.Error()}
 		}
-		exists, _, err := g.read(ctx, owner, repo, f.Path, baseSHA)
+		exists, current, err := g.read(ctx, owner, repo, f.Path, baseSHA)
 		if err != nil {
 			return err
 		}
 		switch {
+		case f.Replace && !exists:
+			return &ConflictError{Msg: fmt.Sprintf("%s is not on %s any more", f.Path, r.BaseBranch)}
+		case f.Replace:
+			if sum := sha256.Sum256([]byte(current)); hex.EncodeToString(sum[:]) != f.BaseSHA256 {
+				return &ConflictError{Msg: fmt.Sprintf("%s changed on %s since it was adopted; adopt it again", f.Path, r.BaseBranch)}
+			}
+			entries = append(entries, blob(f.Path, f.Content))
+			continue // its kustomization lists it already
 		case f.Delete && !exists:
 			continue // gone already
 		case f.Delete:
@@ -325,7 +340,7 @@ func (g *GitHub) commit(ctx context.Context, owner, repo string, r Request, res 
 		}
 		files = append(files, f)
 	}
-	if len(files) == 0 {
+	if len(files) == 0 && len(entries) == 0 {
 		return &ConflictError{Msg: fmt.Sprintf("nothing to remove: none of the files is on %s any more", r.BaseBranch)}
 	}
 

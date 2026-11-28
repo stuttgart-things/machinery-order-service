@@ -1,6 +1,6 @@
-# 0004: Recover lost Orders from git, on request
+# 0004: Recover lost Orders from git and adopt hand-written XRs, on request
 
-- Status: accepted (Recovered, incl. open pull requests); Adopt follows in its own change
+- Status: accepted
 - Date: 2026-11-28
 
 ## Context
@@ -86,6 +86,37 @@ The finalizer closes an open pull request when its Order is deleted, so
 this matters when CRs vanish without it running (a lost or restored
 cluster). Not recovered: orders already torn down (their files are gone),
 pull requests without a trailer (opened by hand or by the claims CLI).
+
+### Adopt: a hand-written XR becomes an order
+
+`POST /api/v1/adopt` (`{"managementCluster", "path", "template",
+"parameters", "reason", "dryRun"}`), admins only, takes over the XR in
+`path` on the base branch: the one document there that names its own file
+(`source-path`). The service opens a pull request (branch `adopt/<xr>`,
+`chore(machinery): adopt <Kind> <name> as order <id>`) that replaces the file
+with **only three additions**: the `order-id` label, the `order-id`
+annotation and the `template` annotation (one-line edits, the rest of the
+file byte for byte). The kustomization is not touched. After the merge the
+order follows the XR (`Merged` → `Applied` → `Ready`) and can be torn down
+through the service. `dryRun` answers with the order ID and the lines it
+would add, and creates nothing.
+
+- **template** is optional. Given, the service test-renders it (name = the
+  XR's name plus `parameters`) and refuses it when the rendered XR is of
+  another kind or API group. Not given: `adopted:<Kind>`, so the origin
+  stays visible (`recovered:<Kind>` is recovery's).
+- **Refused**: XR names in the ManagementCluster's `spec.adoptExclude`
+  (403) -- the exclusions live with the cluster, not in the code; a kind
+  outside `spec.allowedKinds`; an XR with an `order-id` already (409:
+  recover it); a file in the orders directory; a file another live Order
+  adopts already (409); a file with no or several self-naming documents.
+- The pull request carries the SHA-256 of the file as it was adopted: if
+  the file changed on the base branch since, the order ends `Failed`
+  instead of overwriting the change.
+
+Not yet: recovery reads only the orders directory, so an adopted order
+whose CR is lost is not recovered (its file lives with the hand-written
+XRs). A ManagementCluster field naming those directories would close that.
 
 ## Consequences
 

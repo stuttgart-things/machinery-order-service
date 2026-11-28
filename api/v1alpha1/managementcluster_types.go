@@ -197,6 +197,13 @@ type ManagementClusterSpec struct {
 	// +kubebuilder:validation:items:Pattern=`^[A-Z][A-Za-z0-9]*(\.[a-z0-9]([-a-z0-9.]*[a-z0-9])?)?$`
 	// +listType=set
 	AllowedKinds []string `json:"allowedKinds,omitempty"`
+	// AdoptExclude are XR names (metadata.name) that POST /api/v1/adopt
+	// refuses on this cluster: hand-written XRs the service must not take
+	// over (docs/adr/0004-recover-adopt.md).
+	// +optional
+	// +kubebuilder:validation:MaxItems=128
+	// +listType=set
+	AdoptExclude []string `json:"adoptExclude,omitempty"`
 }
 
 // ManagementClusterStatus is what the service last saw of the cluster,
