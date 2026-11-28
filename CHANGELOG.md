@@ -1,3 +1,10 @@
+# [0.14.0](https://github.com/stuttgart-things/machinery-order-service/compare/v0.13.0...v0.14.0) (2026-11-28)
+
+
+### Features
+
+* recover picks up open order and teardown pull requests (PROpen, TeardownPROpen) ([#42](https://github.com/stuttgart-things/machinery-order-service/issues/42)) ([df36e89](https://github.com/stuttgart-things/machinery-order-service/commit/df36e89ff30b6b7ebbc06dd569c3f3014b7cb193))
+
 # [0.13.0](https://github.com/stuttgart-things/machinery-order-service/compare/v0.12.0...v0.13.0) (2026-11-28)
 
 
