@@ -35,6 +35,12 @@ API (`apiRunnable`, every replica).
   commit trailer; `File.Delete` removes a file (teardown). A foreign branch
   whose head is on the base is deleted and recreated (#20). `ConflictError` =
   taken file/branch (order Failed; a teardown only records it).
+- `internal/recovery` - `POST /api/v1/recover` (ADR 0004, #4823): order XR
+  files in `ordersPath` without an Order → Order with `spec.recovered`
+  (files from the `Order-Id:` commit, its PR); the controller starts it in
+  `Recovered`. `internal/delivery/read.go` has the GitHub reads (`Dir`,
+  `File`, `Origin`). Intake annotates every XR with
+  `stuttgart-things.com/template` (`internal/yamledit`, one-line edits).
 - `internal/machinery` - gRPC client for machinery `GetResourceDetail` and
   `GetResources` (`List`; a kind outside the watch set or an RPC machinery
   lacks is `ErrKindNotWatched`, which means "answered, cannot tell").

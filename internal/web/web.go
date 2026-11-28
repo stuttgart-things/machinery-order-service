@@ -389,6 +389,9 @@ var path = []v1alpha1.Phase{
 	v1alpha1.PhaseApplied, v1alpha1.PhaseBuilding, v1alpha1.PhaseReady,
 }
 
+// recoveredPath replaces path for an Order rebuilt from git (#4823).
+var recoveredPath = []v1alpha1.Phase{v1alpha1.PhaseRecovered, v1alpha1.PhaseBuilding, v1alpha1.PhaseReady}
+
 // teardownPath follows path once a teardown was asked for.
 var teardownPath = []v1alpha1.Phase{v1alpha1.PhaseTeardownPROpen, v1alpha1.PhaseTearingDown, v1alpha1.PhaseDeleted}
 
@@ -399,8 +402,11 @@ func timeline(o *v1alpha1.Order) []step {
 	}
 	var out []step
 	phases := path
+	if o.Spec.Recovered != nil {
+		phases = recoveredPath
+	}
 	if o.Spec.Teardown != nil {
-		phases = append(slices.Clone(path), teardownPath...)
+		phases = append(slices.Clone(phases), teardownPath...)
 	}
 	for _, p := range phases {
 		s := step{Phase: p, State: "todo"}

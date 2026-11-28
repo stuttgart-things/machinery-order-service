@@ -43,6 +43,7 @@ on the base branch.
 | `PROpen` | files on branch `vm-<name>`, pull request open |
 | `Merged` | merged; `status.delivery.mergeSHA` |
 | `Applied` | the cluster's Flux Kustomization is at or past the merge |
+| `Recovered` | the Order was rebuilt from git after its CR was lost (`POST /api/v1/recover`, `spec.recovered`, [ADR 0004](docs/adr/0004-recover-adopt.md)); from here it follows the live XR like `Applied` |
 | `Building` | machinery sees the XR, not Ready yet |
 | `Ready` | machinery reports the XR Ready (`status.live`: address, info) |
 | `TeardownPROpen` | teardown requested, `delete-claim/<xr>` pull request open (`status.teardown`); closed unmerged = withdrawn, back to the phase before |
@@ -61,6 +62,7 @@ on the base branch.
 | `GET` | `/api/v1/orders/{id}` | one order with its files; 404 when the caller may not see it |
 | `POST` | `/api/v1/orders/{id}/cancel` | `{"resourceVersion"}` optional: 409 when the order moved. Only before the merge, by whoever may see it |
 | `POST` | `/api/v1/orders/{id}/teardown` | `{"reason", "autoMerge", "resourceVersion"}` → 202. Only merged orders, by whoever may see them; 409 before the merge, while a teardown runs or after one completed; 403 when `autoMerge` is asked by someone other than the orderer or matches no rule with `actions: [teardown]` |
+| `POST` | `/api/v1/recover` | `{"managementCluster", "dryRun"}` (no cluster = all) → 200 `{"results": [{"managementCluster", "existing", "recovered", "skipped"}]}`. Admins only (403). Rebuilds the Orders whose CRs are gone from the order files on the base branch: same order ID, `requested-by` from the file, files and pull request from the `Order-Id:` commit, phase `Recovered`. `dryRun` creates nothing ([ADR 0004](docs/adr/0004-recover-adopt.md)) |
 | `GET` | `/api/v1/management-clusters` | `{"items": [{"name", "lab", "cordoned", "ready", "readyMessage", "conditions", "checkedAt", "capabilities", "repository", "ordersPath", "autoMerge"}]}`: where orders can go, whether the cluster is healthy, what it can build, and who may auto-merge what |
 | `GET` | `/ui/` | **My orders**, live through SSE |
 | `GET` | `/ui/?scope=all` | **All orders** (admins) or **All I may see** (own + the teams', ADR 0001), with orderer and group; `group=<group>` (or `-` for none) keeps one group, `sort=group` groups the rows. Group = the order's `owner`, else the orderer's groups at order time |
@@ -333,9 +335,10 @@ Tests use fakes for everything outside: `internal/delivery/githubfake`
 
 ## Not here yet
 
-- recovering Orders from git + live (`Recovered`) and `adopt` for
-  hand-written XRs: stuttgart-things/stuttgart-things#4823 (machinery's side,
-  finding XRs by order-id, is done: stuttgart-things/stuttgart-things#4557)
+- `adopt` for hand-written XRs: stuttgart-things/stuttgart-things#4823
+  (recovering lost Orders from git is done, [ADR 0004](docs/adr/0004-recover-adopt.md));
+  finding XRs by order-id in machinery itself is stuttgart-things/machinery#116,
+  not needed for either (git is the index)
 - the scheduler (InfraTarget, PlacementPolicy, capacity):
   stuttgart-things/stuttgart-things#4298, stuttgart-things/stuttgart-things#4299
 - UI stages 2–4 (stuttgart-things/stuttgart-things#4300); a direct ZITADEL

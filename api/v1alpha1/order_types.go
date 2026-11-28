@@ -15,23 +15,31 @@ const (
 	OrderIDKey = "stuttgart-things.com/order-id"
 	// RequestedByKey holds the orderer on the Order CR.
 	RequestedByKey = "stuttgart-things.com/requested-by"
+	// TemplateKey is the ClaimTemplate an order was rendered from, an
+	// annotation on the order's XR document (#4823): it lets a recovered
+	// Order name its template.
+	TemplateKey = "stuttgart-things.com/template"
 	// Finalizer keeps an Order until it is safe to forget it. Deleting an
 	// Order never tears anything down.
 	Finalizer = "order.machinery.stuttgart-things.com/finalizer"
 )
 
 // Phase is where an order stands, across git and the live side.
-// +kubebuilder:validation:Enum=Ordered;Placed;PROpen;Merged;Applied;Building;Ready;TeardownPROpen;TearingDown;Deleted;Cancelled;Failed
+// +kubebuilder:validation:Enum=Ordered;Placed;PROpen;Merged;Applied;Recovered;Building;Ready;TeardownPROpen;TearingDown;Deleted;Cancelled;Failed
 type Phase string
 
 const (
-	PhaseOrdered  Phase = "Ordered"
-	PhasePlaced   Phase = "Placed"
-	PhasePROpen   Phase = "PROpen"
-	PhaseMerged   Phase = "Merged"
-	PhaseApplied  Phase = "Applied"
-	PhaseBuilding Phase = "Building"
-	PhaseReady    Phase = "Ready"
+	PhaseOrdered Phase = "Ordered"
+	PhasePlaced  Phase = "Placed"
+	PhasePROpen  Phase = "PROpen"
+	PhaseMerged  Phase = "Merged"
+	PhaseApplied Phase = "Applied"
+	// PhaseRecovered: the Order was rebuilt from git after its CR was lost
+	// (spec.recovered, docs/adr/0004-recover-adopt.md); it follows the live
+	// XR from here like an applied order.
+	PhaseRecovered Phase = "Recovered"
+	PhaseBuilding  Phase = "Building"
+	PhaseReady     Phase = "Ready"
 	// PhaseTeardownPROpen: the teardown's delete-claim pull request is open
 	// (docs/adr/0003-teardown.md).
 	PhaseTeardownPROpen Phase = "TeardownPROpen"
@@ -56,7 +64,7 @@ func (p Phase) Terminal() bool {
 // order's files are on the base branch and no teardown runs.
 func (p Phase) Teardownable() bool {
 	switch p {
-	case PhaseMerged, PhaseApplied, PhaseBuilding, PhaseReady, PhaseDeleted:
+	case PhaseMerged, PhaseApplied, PhaseRecovered, PhaseBuilding, PhaseReady, PhaseDeleted:
 		return true
 	}
 	return false
@@ -147,6 +155,30 @@ type OrderSpec struct {
 	// POST /api/v1/orders/{id}/teardown; a new request raises Attempt.
 	// +optional
 	Teardown *TeardownRequest `json:"teardown,omitempty"`
+	// Recovered is set when the Order was rebuilt from git instead of
+	// ordered (POST /api/v1/recover, docs/adr/0004-recover-adopt.md):
+	// spec.rendered holds the files as they are on the base branch, and the
+	// order starts in phase Recovered.
+	// +optional
+	Recovered *RecoveredFrom `json:"recovered,omitempty"`
+}
+
+// RecoveredFrom is where a recovered Order was found.
+type RecoveredFrom struct {
+	// Path is the XR's file on the base branch.
+	Path string `json:"path"`
+	// CommitSHA is the commit on the base branch that brought the order in
+	// (its Order-Id trailer); empty when none was found.
+	// +optional
+	CommitSHA string `json:"commitSHA,omitempty"`
+	// PullRequest is the order's merged pull request, when one was found.
+	// +optional
+	PullRequest *PullRequest `json:"pullRequest,omitempty"`
+	// By is who asked for the recovery (user:default/<name>).
+	// +optional
+	By string `json:"by,omitempty"`
+	// At is when the Order was recovered.
+	At metav1.Time `json:"at"`
 }
 
 // TeardownRequest is one request to tear an order down.

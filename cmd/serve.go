@@ -236,7 +236,7 @@ func serve(ctx context.Context) error {
 
 	basePath := strings.TrimRight(os.Getenv("BASE_PATH"), "/")
 	srv := &api.Server{
-		Client: mgr.GetClient(), Namespace: ns, Auth: authn, Renderer: renderer, Hub: hub, BasePath: basePath,
+		Client: mgr.GetClient(), Namespace: ns, Auth: authn, Renderer: renderer, Hub: hub, BasePath: basePath, Git: git,
 		Ready: func() bool { return inf.HasSynced() },
 	}
 	srv.Extra = (&web.UI{API: srv, BasePath: basePath}).Register

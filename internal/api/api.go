@@ -6,6 +6,7 @@
 //	GET  /api/v1/orders/{id}            one order
 //	POST /api/v1/orders/{id}/cancel     cancel before the merge
 //	POST /api/v1/orders/{id}/teardown   remove what a merged order built (ADR 0003)
+//	POST /api/v1/recover                rebuild lost Orders from git, admins (ADR 0004)
 //	GET  /api/v1/management-clusters    where orders can go
 //	GET  /health, /ready, /version
 //
@@ -38,6 +39,7 @@ import (
 	"github.com/stuttgart-things/machinery-order-service/internal/capabilities"
 	"github.com/stuttgart-things/machinery-order-service/internal/clusterhealth"
 	"github.com/stuttgart-things/machinery-order-service/internal/intake"
+	"github.com/stuttgart-things/machinery-order-service/internal/recovery"
 	"github.com/stuttgart-things/machinery-order-service/internal/render"
 	"github.com/stuttgart-things/machinery-order-service/internal/version"
 )
@@ -54,6 +56,8 @@ type Server struct {
 	BasePath string
 	// Ready reports whether the caches have synced.
 	Ready func() bool
+	// Git reads the repository for POST /api/v1/recover; nil turns it off.
+	Git recovery.Git
 	// Extra registers more routes under BasePath (the web UI).
 	Extra func(mux *http.ServeMux, prefix string)
 }
@@ -119,6 +123,7 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET "+p+"/api/v1/orders/{id}", s.get)
 		mux.HandleFunc("POST "+p+"/api/v1/orders/{id}/cancel", s.cancel)
 		mux.HandleFunc("POST "+p+"/api/v1/orders/{id}/teardown", s.teardown)
+		mux.HandleFunc("POST "+p+"/api/v1/recover", s.recover)
 		mux.HandleFunc("GET "+p+"/api/v1/management-clusters", s.clusters)
 		mux.HandleFunc("GET "+p+"/health", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, map[string]string{"status": "ok"}) })
 		mux.HandleFunc("GET "+p+"/ready", s.ready)
@@ -346,6 +351,88 @@ func (s *Server) teardown(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	status, body := s.Teardown(r.Context(), c, r.PathValue("id"), req)
+	writeJSON(w, status, body)
+}
+
+// RecoverRequest is the body of POST /api/v1/recover
+// (docs/adr/0004-recover-adopt.md).
+type RecoverRequest struct {
+	// ManagementCluster limits the run to one cluster; empty = all.
+	ManagementCluster string `json:"managementCluster,omitempty"`
+	// DryRun lists what would be recovered and creates nothing.
+	DryRun bool `json:"dryRun,omitempty"`
+}
+
+// RecoverResponse is the answer: one result per ManagementCluster.
+type RecoverResponse struct {
+	Results []recovery.Result `json:"results"`
+}
+
+// Recover rebuilds the Orders whose CRs are gone from the order files on the
+// base branch (#4823). Admins only: it creates Orders in other people's
+// names.
+func (s *Server) Recover(ctx context.Context, c *Caller, req RecoverRequest) (int, any) {
+	if s.Git == nil {
+		return http.StatusNotImplemented, ErrorResponse{Error: "recovery is not configured"}
+	}
+	if !s.IsAdmin(c) {
+		return http.StatusForbidden, ErrorResponse{Error: "recovering orders is for admins"}
+	}
+	var mcs []v1alpha1.ManagementCluster
+	if req.ManagementCluster != "" {
+		mc := &v1alpha1.ManagementCluster{}
+		if err := s.Client.Get(ctx, types.NamespacedName{Name: req.ManagementCluster}, mc); err != nil {
+			if apierrors.IsNotFound(err) {
+				return http.StatusBadRequest, ErrorResponse{Error: fmt.Sprintf("unknown management cluster %q", req.ManagementCluster)}
+			}
+			return http.StatusInternalServerError, ErrorResponse{Error: err.Error()}
+		}
+		mcs = append(mcs, *mc)
+	} else {
+		var list v1alpha1.ManagementClusterList
+		if err := s.Client.List(ctx, &list); err != nil {
+			return http.StatusInternalServerError, ErrorResponse{Error: err.Error()}
+		}
+		mcs = list.Items
+	}
+	by := ""
+	if c != nil && c.ID != nil {
+		by = c.Ref
+	}
+	out := RecoverResponse{Results: []recovery.Result{}}
+	for i := range mcs {
+		if mcs[i].Spec.GitOps.OrdersPath == "" {
+			continue
+		}
+		res, err := recovery.Run(ctx, s.Client, s.Git, &mcs[i], s.Namespace, by, req.DryRun)
+		if err != nil {
+			return http.StatusBadGateway, ErrorResponse{Error: fmt.Sprintf("%s: %v", mcs[i].Name, err)}
+		}
+		for _, r := range res.Recovered {
+			if !req.DryRun && r.Skipped == "" {
+				slog.Info("order recovered", "order", r.OrderID, "cluster", mcs[i].Name, "path", r.Path, "by", by)
+			}
+		}
+		out.Results = append(out.Results, *res)
+	}
+	return http.StatusOK, out
+}
+
+func (s *Server) recover(w http.ResponseWriter, r *http.Request) {
+	c, ok := s.Authorize(w, r, false)
+	if !ok {
+		return
+	}
+	var req RecoverRequest
+	if r.ContentLength != 0 {
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+			return
+		}
+	}
+	status, body := s.Recover(r.Context(), c, req)
 	writeJSON(w, status, body)
 }
 

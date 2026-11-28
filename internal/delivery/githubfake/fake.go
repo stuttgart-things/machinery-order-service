@@ -23,6 +23,7 @@ type commit struct {
 	Tree    string
 	Parents []string
 	Message string
+	Seq     int
 }
 
 // PR is a pull request of the fake.
@@ -102,7 +103,7 @@ func (s *Server) putTree(files map[string]string) string {
 func (s *Server) putCommit(tree string, parents []string, msg string) string {
 	s.n++
 	sha := hash("commit", tree, strings.Join(parents, ","), msg, strconv.Itoa(s.n))
-	s.commits[sha] = &commit{SHA: sha, Tree: tree, Parents: parents, Message: msg}
+	s.commits[sha] = &commit{SHA: sha, Tree: tree, Parents: parents, Message: msg, Seq: s.n}
 	return sha
 }
 
@@ -372,6 +373,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		v, ok := s.trees[c.Tree][path]
 		if !ok {
+			if entries := dirEntries(s.trees[c.Tree], path); len(entries) > 0 {
+				writeJSON(w, 200, entries)
+				return
+			}
 			notFound(w)
 			return
 		}
@@ -421,6 +426,58 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 
 	case r.Method == http.MethodGet && strings.HasPrefix(rest, "commits/") && strings.HasSuffix(rest, "/status"):
 		writeJSON(w, 200, map[string]any{"state": "pending", "statuses": []any{}})
+
+	case r.Method == http.MethodGet && strings.HasPrefix(rest, "commits/") && strings.HasSuffix(rest, "/pulls"):
+		sha := strings.TrimSuffix(strings.TrimPrefix(rest, "commits/"), "/pulls")
+		out := []map[string]any{}
+		for _, p := range s.pulls {
+			if p.HeadSHA == sha || (p.Merged && p.MergeSHA == sha) {
+				out = append(out, s.prJSON(p))
+			}
+		}
+		writeJSON(w, 200, out)
+
+	case r.Method == http.MethodGet && strings.HasPrefix(rest, "commits/"):
+		c, ok := s.commits[strings.TrimPrefix(rest, "commits/")]
+		if !ok {
+			notFound(w)
+			return
+		}
+		files := []map[string]any{}
+		for _, f := range s.changed(c) {
+			files = append(files, map[string]any{"filename": f.path, "status": f.status})
+		}
+		writeJSON(w, 200, map[string]any{"sha": c.SHA, "commit": map[string]any{"message": c.Message}, "files": files})
+
+	case r.Method == http.MethodGet && rest == "commits":
+		ref := r.URL.Query().Get("sha")
+		if sha, ok := s.refs["heads/"+ref]; ok {
+			ref = sha
+		}
+		if _, ok := s.commits[ref]; !ok {
+			notFound(w)
+			return
+		}
+		path := r.URL.Query().Get("path")
+		var hist []*commit
+		for sha := range s.commits {
+			c := s.commits[sha]
+			if !s.ancestor(sha, ref) {
+				continue
+			}
+			for _, f := range s.changed(c) {
+				if path == "" || f.path == path {
+					hist = append(hist, c)
+					break
+				}
+			}
+		}
+		sort.Slice(hist, func(i, j int) bool { return hist[i].Seq > hist[j].Seq })
+		out := []map[string]any{}
+		for _, c := range hist {
+			out = append(out, map[string]any{"sha": c.SHA, "commit": map[string]any{"message": c.Message}})
+		}
+		writeJSON(w, 200, out)
 
 	case r.Method == http.MethodPut && strings.HasPrefix(rest, "pulls/") && strings.HasSuffix(rest, "/merge"):
 		n, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(rest, "pulls/"), "/merge"))
@@ -508,6 +565,63 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	default:
 		notFound(w)
 	}
+}
+
+type change struct{ path, status string }
+
+// changed lists what c changed against its first parent.
+func (s *Server) changed(c *commit) []change {
+	before := map[string]string{}
+	if len(c.Parents) > 0 {
+		before = s.trees[s.commits[c.Parents[0]].Tree]
+	}
+	after := s.trees[c.Tree]
+	var out []change
+	for k, v := range after {
+		old, ok := before[k]
+		switch {
+		case !ok:
+			out = append(out, change{k, "added"})
+		case old != v:
+			out = append(out, change{k, "modified"})
+		}
+	}
+	for k := range before {
+		if _, ok := after[k]; !ok {
+			out = append(out, change{k, "removed"})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].path < out[j].path })
+	return out
+}
+
+// dirEntries lists the files and directories directly in dir.
+func dirEntries(tree map[string]string, dir string) []map[string]any {
+	prefix := strings.TrimSuffix(dir, "/") + "/"
+	seen := map[string]bool{}
+	var out []map[string]any
+	keys := make([]string, 0, len(tree))
+	for k := range tree {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		rest, ok := strings.CutPrefix(k, prefix)
+		if !ok {
+			continue
+		}
+		name, _, sub := strings.Cut(rest, "/")
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		typ := "file"
+		if sub {
+			typ = "dir"
+		}
+		out = append(out, map[string]any{"type": typ, "name": name, "path": prefix + name})
+	}
+	return out
 }
 
 // Branches returns the branch names.
