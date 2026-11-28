@@ -1,3 +1,10 @@
+# [0.13.0](https://github.com/stuttgart-things/machinery-order-service/compare/v0.12.0...v0.13.0) (2026-11-28)
+
+
+### Features
+
+* recover lost Orders from git (POST /api/v1/recover, phase Recovered) ([#41](https://github.com/stuttgart-things/machinery-order-service/issues/41)) ([e4d98af](https://github.com/stuttgart-things/machinery-order-service/commit/e4d98affcaf92a4369033bc8205f39c33c8f7625)), closes [stuttgart-things/stuttgart-things#4823](https://github.com/stuttgart-things/stuttgart-things/issues/4823)
+
 # [0.12.0](https://github.com/stuttgart-things/machinery-order-service/compare/v0.11.0...v0.12.0) (2026-11-27)
 
 
