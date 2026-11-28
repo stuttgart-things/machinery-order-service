@@ -46,6 +46,7 @@ import (
 	"github.com/stuttgart-things/machinery-order-service/internal/delivery"
 	"github.com/stuttgart-things/machinery-order-service/internal/intake"
 	"github.com/stuttgart-things/machinery-order-service/internal/machinery"
+	"github.com/stuttgart-things/machinery-order-service/internal/recovery"
 	"github.com/stuttgart-things/machinery-order-service/internal/render"
 )
 
@@ -190,6 +191,9 @@ func (r *OrderReconciler) step(ctx context.Context, o *v1alpha1.Order) (ctrl.Res
 		o.Status.OrderID = o.Name
 	}
 	if o.Status.Phase == "" {
+		if o.Spec.Recovered != nil {
+			return r.recovered(ctx, o)
+		}
 		SetPhase(o, v1alpha1.PhaseOrdered, "accepted")
 	}
 	if o.Status.Phase.Terminal() {
@@ -264,7 +268,7 @@ func (r *OrderReconciler) advance(ctx context.Context, o *v1alpha1.Order) (ctrl.
 		}
 		return r.followApply(ctx, o)
 
-	case v1alpha1.PhaseApplied, v1alpha1.PhaseBuilding, v1alpha1.PhaseReady, v1alpha1.PhaseDeleted:
+	case v1alpha1.PhaseApplied, v1alpha1.PhaseRecovered, v1alpha1.PhaseBuilding, v1alpha1.PhaseReady, v1alpha1.PhaseDeleted:
 		if o.TornDown() {
 			// Final: a new order of the same name must not be taken for
 			// this one.
@@ -282,6 +286,50 @@ func (r *OrderReconciler) advance(ctx context.Context, o *v1alpha1.Order) (ctrl.
 		return r.followTeardown(ctx, o)
 	}
 	return ctrl.Result{}, nil
+}
+
+// recovered starts an Order rebuilt from git (spec.recovered, #4823): the
+// status a merged order would have, then phase Recovered, from where the
+// live XR decides (Building, Ready; a missing XR is "not yet").
+func (r *OrderReconciler) recovered(ctx context.Context, o *v1alpha1.Order) (ctrl.Result, error) {
+	rc := o.Spec.Recovered
+	rd := o.EffectiveRendered()
+	if rd == nil {
+		SetPhase(o, v1alpha1.PhaseFailed, "recovered without files (spec.rendered)")
+		return ctrl.Result{}, nil
+	}
+	xr, err := intake.XRRef(rd)
+	if err != nil {
+		SetPhase(o, v1alpha1.PhaseFailed, "recovered: "+err.Error())
+		return ctrl.Result{}, nil
+	}
+	mc, err := r.cluster(ctx, o.Spec.Placement.ManagementCluster)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	repo, base := recovery.Repository(mc)
+	p := o.Spec.Placement
+	o.Status.Placement = &p
+	o.Status.XRRef = xr
+	o.Status.Files = intake.Paths(rd)
+	d := &v1alpha1.DeliveryStatus{Repository: repo, BaseBranch: base, MergeSHA: rc.CommitSHA}
+	if rc.PullRequest != nil {
+		pr := *rc.PullRequest
+		d.PullRequest = &pr
+	}
+	o.Status.Delivery = d
+	msg := "recovered from " + rc.Path
+	switch {
+	case rc.PullRequest != nil:
+		msg += " (" + rc.PullRequest.URL + ")"
+	case rc.CommitSHA != "":
+		msg += " (commit " + short(rc.CommitSHA) + ")"
+	}
+	if rc.By != "" {
+		msg += " by " + rc.By
+	}
+	SetPhase(o, v1alpha1.PhaseRecovered, msg)
+	return r.step(ctx, o)
 }
 
 func (r *OrderReconciler) cluster(ctx context.Context, name string) (*v1alpha1.ManagementCluster, error) {

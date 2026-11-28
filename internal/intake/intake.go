@@ -23,6 +23,7 @@ import (
 	"github.com/stuttgart-things/machinery-order-service/api/v1alpha1"
 	"github.com/stuttgart-things/machinery-order-service/internal/layout"
 	"github.com/stuttgart-things/machinery-order-service/internal/render"
+	"github.com/stuttgart-things/machinery-order-service/internal/yamledit"
 )
 
 // Parameters the service sets from the order and its placement; an orderer
@@ -181,6 +182,9 @@ func Render(ctx context.Context, r Renderer, o *v1alpha1.Order, mc *v1alpha1.Man
 	if _, ok := layout.XR(files); !ok {
 		return nil, &InvalidError{Msg: fmt.Sprintf("template %s: no document names its own file (%s)", o.Spec.Template, layout.AnnotationSourcePath)}
 	}
+	if err := annotateTemplate(files, o.Spec.Template); err != nil {
+		return nil, &InvalidError{Msg: fmt.Sprintf("template %s: %v", o.Spec.Template, err)}
+	}
 	raw, err := Encode(params)
 	if err != nil {
 		return nil, err
@@ -190,6 +194,27 @@ func Render(ctx context.Context, r Renderer, o *v1alpha1.Order, mc *v1alpha1.Man
 		rd.Files = append(rd.Files, v1alpha1.RenderedFile{Path: f.Path, Content: f.Content()})
 	}
 	return rd, nil
+}
+
+// annotateTemplate records the template on the XR document (the one
+// layout.XR picks), so an Order recovered from git knows it (#4823).
+func annotateTemplate(files []layout.File, template string) error {
+	for i := range files {
+		for j := range files[i].Documents {
+			d := &files[i].Documents[j]
+			if d.Annotations[layout.AnnotationSourcePath] == "" {
+				continue
+			}
+			out, _, err := yamledit.SetMetadata(d.Content, "annotations", v1alpha1.TemplateKey, template)
+			if err != nil {
+				return fmt.Errorf("%s %s: %w", d.Kind, d.Name, err)
+			}
+			d.Content = out
+			d.Annotations[v1alpha1.TemplateKey] = template
+			return nil
+		}
+	}
+	return nil
 }
 
 // Files re-reads the rendered files into documents.
