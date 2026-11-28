@@ -121,3 +121,78 @@ func (g *GitHub) Origin(ctx context.Context, repository, ref, p, id string) (*Or
 	}
 	return o, nil
 }
+
+// TrailerOf returns the value of the message's Order-Id trailer, "" when it
+// has none.
+func TrailerOf(message string) string {
+	for _, line := range strings.Split(message, "\n") {
+		k, v, ok := strings.Cut(line, ":")
+		if ok && strings.EqualFold(strings.TrimSpace(k), TrailerKey) {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
+// FileChange is one file a pull request changes.
+type FileChange struct {
+	Path    string
+	Removed bool
+}
+
+// OpenPR is an open pull request of an order: one of its commits carries an
+// Order-Id trailer.
+type OpenPR struct {
+	Number  int
+	URL     string
+	Branch  string
+	HeadSHA string
+	OrderID string
+	Files   []FileChange
+}
+
+// OpenPulls lists the open pull requests against base whose commits carry
+// an Order-Id trailer (an order's or a teardown's), with the files they
+// change.
+func (g *GitHub) OpenPulls(ctx context.Context, repository, base string) ([]OpenPR, error) {
+	owner, repo, err := split(repository)
+	if err != nil {
+		return nil, err
+	}
+	var out []OpenPR
+	opts := &github.PullRequestListOptions{State: "open", Base: base, ListOptions: github.ListOptions{PerPage: 100}}
+	for {
+		prs, resp, err := g.Client.PullRequests.List(ctx, owner, repo, opts)
+		if err != nil {
+			return nil, fmt.Errorf("listing open pull requests: %w", err)
+		}
+		for _, pr := range prs {
+			commits, _, err := g.Client.PullRequests.ListCommits(ctx, owner, repo, pr.GetNumber(), &github.ListOptions{PerPage: 100})
+			if err != nil {
+				return nil, fmt.Errorf("commits of #%d: %w", pr.GetNumber(), err)
+			}
+			id := ""
+			for _, c := range commits {
+				if v := TrailerOf(c.GetCommit().GetMessage()); v != "" {
+					id = v
+				}
+			}
+			if id == "" {
+				continue
+			}
+			files, _, err := g.Client.PullRequests.ListFiles(ctx, owner, repo, pr.GetNumber(), &github.ListOptions{PerPage: 100})
+			if err != nil {
+				return nil, fmt.Errorf("files of #%d: %w", pr.GetNumber(), err)
+			}
+			o := OpenPR{Number: pr.GetNumber(), URL: pr.GetHTMLURL(), Branch: pr.GetHead().GetRef(), HeadSHA: pr.GetHead().GetSHA(), OrderID: id}
+			for _, f := range files {
+				o.Files = append(o.Files, FileChange{Path: f.GetFilename(), Removed: f.GetStatus() == "removed"})
+			}
+			out = append(out, o)
+		}
+		if resp == nil || resp.NextPage == 0 {
+			return out, nil
+		}
+		opts.Page = resp.NextPage
+	}
+}

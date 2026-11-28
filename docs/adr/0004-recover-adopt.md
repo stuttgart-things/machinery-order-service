@@ -1,6 +1,6 @@
 # 0004: Recover lost Orders from git, on request
 
-- Status: accepted (Recovered); Adopt follows in its own change
+- Status: accepted (Recovered, incl. open pull requests); Adopt follows in its own change
 - Date: 2026-11-28
 
 ## Context
@@ -67,8 +67,25 @@ file is on the base branch already. A recovered order can be torn down like
 any merged one (`Recovered` is teardownable); the teardown removes all its
 files.
 
-Not recovered: orders whose pull request was never merged (close the PR and
-order again) and orders already torn down (their files are gone).
+### Open pull requests
+
+The base branch is not all git holds. Recovery also reads the open pull
+requests against it whose commits carry an `Order-Id:` trailer (the service
+writes one into every commit, the order's and the teardown's):
+
+- **an order not merged yet** (its XR file goes into the cluster's orders
+  directory, the order-id is not on the base branch): the Order gets the
+  files as on the branch head and starts in `PROpen`, following that pull
+  request (merged → `Merged`, closed → `Cancelled`) -- no second PR.
+- **an open teardown** (branch `delete-claim/...`) of an order whose file is
+  on the base branch: the Order starts in `TeardownPROpen` with
+  `spec.teardown` attempt 1 and that pull request in `status.teardown`;
+  merged → `TearingDown`, closed unmerged → back to `Recovered`.
+
+The finalizer closes an open pull request when its Order is deleted, so
+this matters when CRs vanish without it running (a lost or restored
+cluster). Not recovered: orders already torn down (their files are gone),
+pull requests without a trailer (opened by hand or by the claims CLI).
 
 ## Consequences
 

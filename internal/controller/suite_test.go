@@ -14,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/config"
@@ -32,6 +33,11 @@ import (
 // GitHub, a fake claim-machinery-api and a fake machinery.
 type env struct {
 	c         client.Client
+	cfg       *rest.Config
+	scheme    *runtime.Scheme
+	gh        *delivery.GitHub
+	health    bool
+	stop      context.CancelFunc
 	git       *githubfake.Server
 	renderer  *rendertest.Fake
 	machinery *machinerytest.Fake
@@ -98,7 +104,20 @@ func startEnv(t *testing.T, health bool) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
+	e.cfg, e.scheme, e.gh, e.health = cfg, scheme, gh, health
+	e.startManager(t)
 
+	e.c, err = client.New(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+// startManager runs the controllers; e.stop ends them (a lost service).
+func (e *env) startManager(t *testing.T) {
+	t.Helper()
+	cfg, scheme, gh, health := e.cfg, e.scheme, e.gh, e.health
 	skip := true
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme: scheme, Metrics: metricsserver.Options{BindAddress: "0"},
@@ -127,13 +146,8 @@ func startEnv(t *testing.T, health bool) *env {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
+	e.stop = cancel
 	go func() { _ = mgr.Start(ctx) }()
-
-	e.c, err = client.New(cfg, client.Options{Scheme: scheme})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return e
 }
 
 func (e *env) cluster(t *testing.T, flux bool) {

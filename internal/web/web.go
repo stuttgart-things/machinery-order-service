@@ -402,8 +402,12 @@ func timeline(o *v1alpha1.Order) []step {
 	}
 	var out []step
 	phases := path
-	if o.Spec.Recovered != nil {
+	if rc := o.Spec.Recovered; rc != nil {
 		phases = recoveredPath
+		if rc.PullRequest != nil && rc.PullRequest.State == "open" {
+			// recovered before the merge: from PROpen on
+			phases = path[slices.Index(path, v1alpha1.PhasePROpen):]
+		}
 	}
 	if o.Spec.Teardown != nil {
 		phases = append(slices.Clone(phases), teardownPath...)
