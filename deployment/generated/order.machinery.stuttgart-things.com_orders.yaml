@@ -143,6 +143,9 @@ spec:
                     description: At is when the Order was recovered.
                     format: date-time
                     type: string
+                  branch:
+                    description: Branch is the open pull request's branch.
+                    type: string
                   by:
                     description: By is who asked for the recovery (user:default/<name>).
                     type: string
@@ -155,8 +158,10 @@ spec:
                     description: Path is the XR's file on the base branch.
                     type: string
                   pullRequest:
-                    description: PullRequest is the order's merged pull request, when
-                      one was found.
+                    description: |-
+                      PullRequest is the order's pull request, when one was found: merged,
+                      or open (state open, the order was not merged yet: the Order starts
+                      in PROpen; CommitSHA is then the branch head).
                     properties:
                       number:
                         type: integer
@@ -169,6 +174,36 @@ spec:
                     - number
                     - state
                     - url
+                    type: object
+                  teardown:
+                    description: |-
+                      Teardown is an open delete-claim pull request of the order: the
+                      Order starts in TeardownPROpen (spec.teardown is attempt 1).
+                    properties:
+                      branch:
+                        type: string
+                      commitSHA:
+                        description: CommitSHA is the branch head.
+                        type: string
+                      pullRequest:
+                        description: PullRequest is the pull request that delivers
+                          the order.
+                        properties:
+                          number:
+                            type: integer
+                          state:
+                            description: State is open, closed or merged.
+                            type: string
+                          url:
+                            type: string
+                        required:
+                        - number
+                        - state
+                        - url
+                        type: object
+                    required:
+                    - branch
+                    - pullRequest
                     type: object
                 required:
                 - at

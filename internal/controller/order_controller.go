@@ -312,6 +312,22 @@ func (r *OrderReconciler) recovered(ctx context.Context, o *v1alpha1.Order) (ctr
 	o.Status.Placement = &p
 	o.Status.XRRef = xr
 	o.Status.Files = intake.Paths(rd)
+	by := ""
+	if rc.By != "" {
+		by = " by " + rc.By
+	}
+	if pr := rc.PullRequest; pr != nil && pr.State == "open" {
+		// Not merged yet: follow the open pull request (PROpen).
+		cp := *pr
+		o.Status.Delivery = &v1alpha1.DeliveryStatus{Repository: repo, BaseBranch: base, Branch: rc.Branch,
+			CommitSHA: rc.CommitSHA, PullRequest: &cp}
+		meta.SetStatusCondition(&o.Status.Conditions, metav1.Condition{
+			Type: ConditionDelivered, Status: metav1.ConditionTrue, Reason: "PullRequestOpened", Message: pr.URL,
+			ObservedGeneration: o.Generation,
+		})
+		SetPhase(o, v1alpha1.PhasePROpen, "recovered with its open pull request "+pr.URL+by)
+		return r.step(ctx, o)
+	}
 	d := &v1alpha1.DeliveryStatus{Repository: repo, BaseBranch: base, MergeSHA: rc.CommitSHA}
 	if rc.PullRequest != nil {
 		pr := *rc.PullRequest
@@ -325,10 +341,17 @@ func (r *OrderReconciler) recovered(ctx context.Context, o *v1alpha1.Order) (ctr
 	case rc.CommitSHA != "":
 		msg += " (commit " + short(rc.CommitSHA) + ")"
 	}
-	if rc.By != "" {
-		msg += " by " + rc.By
+	SetPhase(o, v1alpha1.PhaseRecovered, msg+by)
+	if td, t := rc.Teardown, o.Spec.Teardown; td != nil && t != nil {
+		// Its teardown's pull request is open: follow that (TeardownPROpen);
+		// closed unmerged goes back to Recovered.
+		pr := td.PullRequest
+		o.Status.Teardown = &v1alpha1.TeardownStatus{Attempt: t.Attempt, FromPhase: v1alpha1.PhaseRecovered,
+			Delivery: &v1alpha1.DeliveryStatus{Repository: repo, BaseBranch: base, Branch: td.Branch, CommitSHA: td.CommitSHA, PullRequest: &pr}}
+		msg := "recovered with its open teardown pull request " + pr.URL
+		r.setTeardown(o, metav1.ConditionUnknown, "PROpen", msg)
+		SetPhase(o, v1alpha1.PhaseTeardownPROpen, msg)
 	}
-	SetPhase(o, v1alpha1.PhaseRecovered, msg)
 	return r.step(ctx, o)
 }
 

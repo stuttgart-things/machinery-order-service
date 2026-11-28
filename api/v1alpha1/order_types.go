@@ -163,6 +163,16 @@ type OrderSpec struct {
 	Recovered *RecoveredFrom `json:"recovered,omitempty"`
 }
 
+// RecoveredTeardown is the open teardown pull request a recovered Order
+// picks up.
+type RecoveredTeardown struct {
+	PullRequest PullRequest `json:"pullRequest"`
+	Branch      string      `json:"branch"`
+	// CommitSHA is the branch head.
+	// +optional
+	CommitSHA string `json:"commitSHA,omitempty"`
+}
+
 // RecoveredFrom is where a recovered Order was found.
 type RecoveredFrom struct {
 	// Path is the XR's file on the base branch.
@@ -171,9 +181,18 @@ type RecoveredFrom struct {
 	// (its Order-Id trailer); empty when none was found.
 	// +optional
 	CommitSHA string `json:"commitSHA,omitempty"`
-	// PullRequest is the order's merged pull request, when one was found.
+	// PullRequest is the order's pull request, when one was found: merged,
+	// or open (state open, the order was not merged yet: the Order starts
+	// in PROpen; CommitSHA is then the branch head).
 	// +optional
 	PullRequest *PullRequest `json:"pullRequest,omitempty"`
+	// Branch is the open pull request's branch.
+	// +optional
+	Branch string `json:"branch,omitempty"`
+	// Teardown is an open delete-claim pull request of the order: the
+	// Order starts in TeardownPROpen (spec.teardown is attempt 1).
+	// +optional
+	Teardown *RecoveredTeardown `json:"teardown,omitempty"`
 	// By is who asked for the recovery (user:default/<name>).
 	// +optional
 	By string `json:"by,omitempty"`

@@ -386,9 +386,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && rest == "pulls":
 		head := strings.TrimPrefix(r.URL.Query().Get("head"), s.Owner+":")
 		state := r.URL.Query().Get("state")
+		base := r.URL.Query().Get("base")
 		out := []map[string]any{}
 		for _, p := range s.pulls {
 			if head != "" && p.Head != head {
+				continue
+			}
+			if base != "" && p.Base != base {
 				continue
 			}
 			if state != "all" && p.State != "open" {
@@ -525,6 +529,35 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, 200, []any{})
 
+	case r.Method == http.MethodGet && strings.HasPrefix(rest, "pulls/") &&
+		(strings.HasSuffix(rest, "/commits") || strings.HasSuffix(rest, "/files")):
+		num, what, _ := strings.Cut(strings.TrimPrefix(rest, "pulls/"), "/")
+		n, err := strconv.Atoi(num)
+		pr := s.pull(n)
+		if err != nil || pr == nil {
+			notFound(w)
+			return
+		}
+		mb := s.mergeBase(pr.HeadSHA, s.refs["heads/"+pr.Base])
+		out := []map[string]any{}
+		if what == "commits" {
+			var cs []*commit
+			for sha, c := range s.commits {
+				if s.ancestor(sha, pr.HeadSHA) && !s.ancestor(sha, mb) {
+					cs = append(cs, c)
+				}
+			}
+			sort.Slice(cs, func(i, j int) bool { return cs[i].Seq < cs[j].Seq })
+			for _, c := range cs {
+				out = append(out, map[string]any{"sha": c.SHA, "commit": map[string]any{"message": c.Message}})
+			}
+		} else {
+			for _, f := range s.diff(s.trees[s.commits[mb].Tree], s.trees[s.commits[pr.HeadSHA].Tree]) {
+				out = append(out, map[string]any{"filename": f.path, "status": f.status})
+			}
+		}
+		writeJSON(w, 200, out)
+
 	case strings.HasPrefix(rest, "pulls/"):
 		n, err := strconv.Atoi(strings.TrimPrefix(rest, "pulls/"))
 		pr := s.pull(n)
@@ -575,7 +608,22 @@ func (s *Server) changed(c *commit) []change {
 	if len(c.Parents) > 0 {
 		before = s.trees[s.commits[c.Parents[0]].Tree]
 	}
-	after := s.trees[c.Tree]
+	return s.diff(before, s.trees[c.Tree])
+}
+
+// mergeBase is the newest commit that is an ancestor of both a and b.
+func (s *Server) mergeBase(a, b string) string {
+	best := ""
+	for sha, c := range s.commits {
+		if s.ancestor(sha, a) && s.ancestor(sha, b) && (best == "" || c.Seq > s.commits[best].Seq) {
+			best = sha
+		}
+	}
+	return best
+}
+
+// diff lists what changed from before to after.
+func (s *Server) diff(before, after map[string]string) []change {
 	var out []change
 	for k, v := range after {
 		old, ok := before[k]

@@ -34,7 +34,12 @@ type Git interface {
 	Dir(ctx context.Context, repository, ref, dir string) ([]delivery.RepoFile, error)
 	File(ctx context.Context, repository, ref, p string) (string, bool, error)
 	Origin(ctx context.Context, repository, ref, p, id string) (*delivery.Origin, error)
+	OpenPulls(ctx context.Context, repository, base string) ([]delivery.OpenPR, error)
 }
+
+// TeardownBranchPrefix is the branch prefix of a delete-claim pull request
+// (intake.TeardownConventionFor).
+const TeardownBranchPrefix = "delete-claim/"
 
 // TemplateUnknown prefixes spec.template of an Order recovered from a file
 // written before the service recorded the template (stuttgart-things.com/template).
@@ -56,6 +61,11 @@ type Candidate struct {
 	Files       []string `json:"files"`
 	CommitSHA   string   `json:"commitSHA,omitempty"`
 	PullRequest string   `json:"pullRequest,omitempty"`
+	// Phase is where the recovered Order starts: Recovered, PROpen (its
+	// pull request is open) or TeardownPROpen (its teardown's is).
+	Phase v1alpha1.Phase `json:"phase,omitempty"`
+	// TeardownPullRequest is the open teardown pull request it picks up.
+	TeardownPullRequest string `json:"teardownPullRequest,omitempty"`
 	// Skipped says why the order is not recovered.
 	Skipped string `json:"skipped,omitempty"`
 
@@ -98,6 +108,19 @@ func Run(ctx context.Context, c client.Client, git Git, mc *v1alpha1.ManagementC
 	files, err := git.Dir(ctx, repo, base, dir)
 	if err != nil {
 		return nil, err
+	}
+	pulls, err := git.OpenPulls(ctx, repo, base)
+	if err != nil {
+		return nil, err
+	}
+	// open pull requests by order ID: the order's own, and its teardown's
+	orderPRs, teardownPRs := map[string]delivery.OpenPR{}, map[string]delivery.OpenPR{}
+	for _, pr := range pulls {
+		if strings.HasPrefix(pr.Branch, TeardownBranchPrefix) {
+			teardownPRs[pr.OrderID] = pr
+		} else {
+			orderPRs[pr.OrderID] = pr
+		}
 	}
 	res := &Result{ManagementCluster: mc.Name, DryRun: dryRun, Recovered: []Candidate{}}
 	cluster := mc.Spec.Render.ClusterName
@@ -143,11 +166,48 @@ func Run(ctx context.Context, c client.Client, git Git, mc *v1alpha1.ManagementC
 			if !apierrors.IsNotFound(err) {
 				return nil, err
 			}
-			if err := build(ctx, git, mc, repo, base, dir, files, &cand, namespace, by); err != nil {
+			var tpr *delivery.OpenPR
+			if pr, ok := teardownPRs[id]; ok {
+				tpr = &pr
+			}
+			if err := build(ctx, git, mc, repo, base, dir, files, &cand, namespace, by, tpr); err != nil {
 				return nil, err
 			}
 			res.Recovered = append(res.Recovered, cand)
 		}
+	}
+	// Orders not merged yet: an open pull request whose XR file goes into
+	// this cluster's directory.
+	ids := make([]string, 0, len(orderPRs))
+	for id := range orderPRs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		pr := orderPRs[id]
+		if _, onMain := seen[id]; onMain {
+			continue
+		}
+		cand, err := fromPR(ctx, git, mc, repo, dir, cluster, pr, namespace, by)
+		if err != nil {
+			return nil, err
+		}
+		if cand == nil {
+			continue // not an order of this cluster
+		}
+		if cand.Skipped != "" {
+			res.Skipped = append(res.Skipped, *cand)
+			continue
+		}
+		err = c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: id}, &v1alpha1.Order{})
+		if err == nil {
+			res.Existing++
+			continue
+		}
+		if !apierrors.IsNotFound(err) {
+			return nil, err
+		}
+		res.Recovered = append(res.Recovered, *cand)
 	}
 	if dryRun {
 		return res, nil
@@ -168,7 +228,7 @@ func Run(ctx context.Context, c client.Client, git Git, mc *v1alpha1.ManagementC
 // build finds the order's commit, pull request and files and makes the
 // Order.
 func build(ctx context.Context, git Git, mc *v1alpha1.ManagementCluster, repo, base, dir string, dirFiles []delivery.RepoFile,
-	cand *Candidate, namespace, by string) error {
+	cand *Candidate, namespace, by string, teardown *delivery.OpenPR) error {
 	origin, err := git.Origin(ctx, repo, base, cand.Path, cand.OrderID)
 	if err != nil {
 		return err
@@ -227,6 +287,88 @@ func build(ctx context.Context, git Git, mc *v1alpha1.ManagementCluster, repo, b
 			cand.PullRequest = pr.URL
 		}
 	}
+	cand.Phase = v1alpha1.PhaseRecovered
+	cand.order = newOrder(cand, mc, namespace, rd, from)
+	if teardown != nil {
+		from.Teardown = &v1alpha1.RecoveredTeardown{
+			PullRequest: v1alpha1.PullRequest{Number: teardown.Number, URL: teardown.URL, State: "open"},
+			Branch:      teardown.Branch, CommitSHA: teardown.HeadSHA,
+		}
+		cand.order.Spec.Teardown = &v1alpha1.TeardownRequest{Attempt: 1, RequestedAt: &now,
+			Reason: "recovered with its open teardown pull request " + teardown.URL}
+		cand.Phase = v1alpha1.PhaseTeardownPROpen
+		cand.TeardownPullRequest = teardown.URL
+	}
+	return nil
+}
+
+// fromPR makes the Order of an open order pull request: its files as on the
+// branch head. nil when the pull request is not an order of this cluster.
+func fromPR(ctx context.Context, git Git, mc *v1alpha1.ManagementCluster, repo, dir, cluster string, pr delivery.OpenPR,
+	namespace, by string) (*Candidate, error) {
+	rd := &v1alpha1.Rendered{RenderedAt: metav1.NewTime(time.Now().UTC().Truncate(time.Second))}
+	var cand *Candidate
+	var rest []v1alpha1.RenderedFile
+	for _, f := range pr.Files {
+		if f.Removed {
+			continue
+		}
+		text, ok, err := git.File(ctx, repo, pr.HeadSHA, f.Path)
+		if err != nil {
+			return nil, err
+		}
+		if !ok || !carries(text, pr.OrderID) {
+			continue
+		}
+		docs, _ := layout.SplitDocuments(text)
+		isXR := false
+		for _, d := range docs {
+			if cand == nil && d.Annotations[v1alpha1.OrderIDKey] == pr.OrderID && d.Annotations[layout.AnnotationSourcePath] == f.Path {
+				if path.Dir(f.Path) != dir {
+					return nil, nil // another cluster's order
+				}
+				cand = &Candidate{OrderID: pr.OrderID, Path: f.Path, Kind: d.Kind, Name: d.Name, Namespace: d.Namespace,
+					Template: d.Annotations[v1alpha1.TemplateKey], RequestedBy: d.Annotations[v1alpha1.RequestedByKey]}
+				if cand.Template == "" {
+					cand.Template = TemplateUnknown + d.Kind
+				}
+				if mcl := d.Annotations[layout.AnnotationManagementCluster]; mcl != "" && mcl != cluster {
+					cand.Skipped = fmt.Sprintf("the file names management cluster %s, not %s", mcl, cluster)
+				}
+				isXR = true
+			}
+		}
+		file := v1alpha1.RenderedFile{Path: f.Path, Content: text}
+		if isXR {
+			rd.Files = append([]v1alpha1.RenderedFile{file}, rd.Files...)
+		} else {
+			rest = append(rest, file)
+		}
+	}
+	if cand == nil {
+		return nil, nil
+	}
+	cand.PullRequest = pr.URL
+	if !orderID.MatchString(pr.OrderID) {
+		cand.Skipped = fmt.Sprintf("order-id %q is not a valid Order name", pr.OrderID)
+	}
+	if cand.Skipped != "" {
+		return cand, nil
+	}
+	sort.Slice(rest, func(i, j int) bool { return rest[i].Path < rest[j].Path })
+	rd.Files = append(rd.Files, rest...)
+	for _, f := range rd.Files {
+		cand.Files = append(cand.Files, f.Path)
+	}
+	cand.CommitSHA = pr.HeadSHA
+	cand.Phase = v1alpha1.PhasePROpen
+	from := &v1alpha1.RecoveredFrom{Path: cand.Path, By: by, At: metav1.Now(), CommitSHA: pr.HeadSHA, Branch: pr.Branch,
+		PullRequest: &v1alpha1.PullRequest{Number: pr.Number, URL: pr.URL, State: "open"}}
+	cand.order = newOrder(cand, mc, namespace, rd, from)
+	return cand, nil
+}
+
+func newOrder(cand *Candidate, mc *v1alpha1.ManagementCluster, namespace string, rd *v1alpha1.Rendered, from *v1alpha1.RecoveredFrom) *v1alpha1.Order {
 	o := &v1alpha1.Order{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: cand.OrderID, Namespace: namespace,
@@ -245,8 +387,7 @@ func build(ctx context.Context, git Git, mc *v1alpha1.ManagementCluster, repo, b
 	if cand.RequestedBy != "" {
 		o.Annotations = map[string]string{v1alpha1.RequestedByKey: cand.RequestedBy}
 	}
-	cand.order = o
-	return nil
+	return o
 }
 
 // carries reports whether a document of text is annotated with order-id id.

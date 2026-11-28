@@ -146,3 +146,113 @@ func (e *env) gone(t *testing.T, name string) {
 	}
 	t.Fatalf("Order %s still there", name)
 }
+
+// TestRecoverOpenPRs: the CRs are lost (service gone, no finalizer runs)
+// while an order's pull request and another order's teardown pull request
+// are open. Recovery picks both up: PROpen and TeardownPROpen, and they go
+// on from there.
+func TestRecoverOpenPRs(t *testing.T) {
+	e := start(t)
+	e.cluster(t, false)
+	ctx := context.Background()
+	dir := "clusters/labda/vsphere/machinery-orders-xrs/"
+
+	e.order(t, "ord-0000000000a1", `{"name":"alpha"}`)
+	e.wait(t, "ord-0000000000a1", "PROpen", phase(v1alpha1.PhasePROpen))
+	e.git.Merge(e.git.Pulls()[0].Number)
+	e.machinery.Set("NativeVsphereVM", "default", "alpha-vm", machinery.Resource{Ready: true})
+	e.wait(t, "ord-0000000000a1", "Ready", phase(v1alpha1.PhaseReady))
+	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		o := &v1alpha1.Order{}
+		if err := e.c.Get(ctx, client.ObjectKey{Namespace: "default", Name: "ord-0000000000a1"}, o); err != nil {
+			return err
+		}
+		o.Spec.Teardown = &v1alpha1.TeardownRequest{Attempt: 1, RequestedBy: "user:default/alice"}
+		return e.c.Update(ctx, o)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	e.wait(t, "ord-0000000000a1", "TeardownPROpen", phase(v1alpha1.PhaseTeardownPROpen))
+	e.order(t, "ord-0000000000b2", `{"name":"beta"}`)
+	e.wait(t, "ord-0000000000b2", "PROpen", phase(v1alpha1.PhasePROpen))
+	var teardownPR, betaPR int
+	for _, pr := range e.git.Pulls() {
+		switch pr.Head {
+		case "delete-claim/alpha-vm":
+			teardownPR = pr.Number
+		case "vm-beta":
+			betaPR = pr.Number
+		}
+	}
+	if teardownPR == 0 || betaPR == 0 {
+		t.Fatalf("pulls %+v", e.git.Pulls())
+	}
+
+	// The service goes; its CRs go without the finalizer (a lost cluster).
+	e.stop()
+	for _, id := range []string{"ord-0000000000a1", "ord-0000000000b2"} {
+		o := &v1alpha1.Order{}
+		if err := e.c.Get(ctx, client.ObjectKey{Namespace: "default", Name: id}, o); err != nil {
+			t.Fatal(err)
+		}
+		o.Finalizers = nil
+		if err := e.c.Update(ctx, o); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.c.Delete(ctx, o); err != nil {
+			t.Fatal(err)
+		}
+		e.gone(t, id)
+	}
+	for _, pr := range e.git.Pulls() {
+		if (pr.Number == teardownPR || pr.Number == betaPR) && pr.State != "open" {
+			t.Fatalf("#%d is %s", pr.Number, pr.State)
+		}
+	}
+	e.startManager(t)
+
+	mc := &v1alpha1.ManagementCluster{}
+	if err := e.c.Get(ctx, client.ObjectKey{Name: "machinery"}, mc); err != nil {
+		t.Fatal(err)
+	}
+	res, err := recovery.Run(ctx, e.c, e.gh, mc, "default", "user:default/root", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]v1alpha1.Phase{"ord-0000000000a1": v1alpha1.PhaseTeardownPROpen, "ord-0000000000b2": v1alpha1.PhasePROpen}
+	if len(res.Recovered) != 2 || len(res.Skipped) != 0 {
+		t.Fatalf("dry run %+v", res)
+	}
+	for _, c := range res.Recovered {
+		if want[c.OrderID] != c.Phase {
+			t.Errorf("dry run: %s phase %s", c.OrderID, c.Phase)
+		}
+	}
+	if _, err := recovery.Run(ctx, e.c, e.gh, mc, "default", "user:default/root", false); err != nil {
+		t.Fatal(err)
+	}
+
+	a := e.wait(t, "ord-0000000000a1", "TeardownPROpen again", phase(v1alpha1.PhaseTeardownPROpen))
+	if a.Status.Teardown == nil || a.Status.Teardown.Delivery.PullRequest.Number != teardownPR ||
+		a.Status.History[0].Phase != v1alpha1.PhaseRecovered {
+		t.Fatalf("alpha: %+v", a.Status)
+	}
+	b := e.wait(t, "ord-0000000000b2", "PROpen again", phase(v1alpha1.PhasePROpen))
+	if b.Status.Delivery == nil || b.Status.Delivery.PullRequest.Number != betaPR || b.Status.Delivery.Branch != "vm-beta" ||
+		len(b.Status.Files) != 1 || b.Status.Files[0] != dir+"beta.yaml" {
+		t.Fatalf("beta: %+v", b.Status)
+	}
+	// No second pull request for either.
+	n := len(e.git.Pulls())
+
+	// They go on: beta's PR is merged and built, alpha's teardown is closed
+	// unmerged (withdrawn), so alpha follows its XR again.
+	e.git.Merge(betaPR)
+	e.machinery.Set("NativeVsphereVM", "default", "beta-vm", machinery.Resource{Ready: true})
+	e.wait(t, "ord-0000000000b2", "beta Ready", phase(v1alpha1.PhaseReady))
+	e.git.ClosePR(teardownPR)
+	e.wait(t, "ord-0000000000a1", "alpha Ready", phase(v1alpha1.PhaseReady))
+	if len(e.git.Pulls()) != n {
+		t.Errorf("new pull requests: %+v", e.git.Pulls())
+	}
+}
